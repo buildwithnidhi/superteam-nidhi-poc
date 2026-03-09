@@ -1,85 +1,54 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getData } from "@/lib/luma";
+import { NextRequest, NextResponse, connection } from "next/server";
+import { fetchEvents, fetchGuestsForEvent } from "@/lib/luma";
 import { LumaGuest } from "@/lib/types";
 
-interface PersonRow {
-  name: string;
-  email: string;
-  role: "host" | "guest";
-  eventName: string;
-  eventId: string;
-  location: string;
-}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function GET(request: NextRequest) {
+  await connection(); // opts out of prerendering
   try {
     const { searchParams } = request.nextUrl;
     const eventIds = searchParams.get("eventIds");
-    const startDate = searchParams.get("startDate");
-    const endDate = searchParams.get("endDate");
-    const city = searchParams.get("city");
-    const country = searchParams.get("country");
 
-    const data = await getData();
-    let events = data.events;
-
-    if (startDate) {
-      const start = new Date(startDate);
-      events = events.filter((e) => new Date(e.start_at) >= start);
-    }
-    if (endDate) {
-      const end = new Date(endDate);
-      end.setHours(23, 59, 59, 999);
-      events = events.filter((e) => new Date(e.start_at) <= end);
-    }
-    if (city) {
-      events = events.filter(
-        (e) => e.geo_address_json?.city?.toLowerCase() === city.toLowerCase()
-      );
-    }
-    if (country) {
-      events = events.filter(
-        (e) =>
-          e.geo_address_json?.country?.toLowerCase() === country.toLowerCase()
-      );
-    }
-    if (eventIds) {
-      const ids = new Set(eventIds.split(","));
-      events = events.filter((e) => ids.has(e.api_id));
+    if (!eventIds) {
+      return NextResponse.json({ people: [] });
     }
 
-    const rows: PersonRow[] = [];
-    const seen = new Set<string>();
+    const ids = eventIds.split(",").filter(Boolean);
+    const allEvents = await fetchEvents(); // hits cache — no extra API calls
+    const eventMap = new Map(allEvents.map((e) => [e.api_id, e]));
 
-    // Find hosts from calendar people with "Host" tag
-    const hostEmails = new Set(
-      data.people
-        .filter((p) =>
-          p.tags.some((t) => t.name.toLowerCase().includes("host"))
-        )
-        .map((p) => p.email.toLowerCase())
-    );
+    // Fetch guests for each selected event sequentially to stay under rate limit
+    const rows: {
+      name: string;
+      email: string;
+      role: "attendee";
+      eventName: string;
+      eventId: string;
+      location: string;
+    }[] = [];
 
-    for (const event of events) {
-      const guests: LumaGuest[] = data.eventGuests[event.api_id] || [];
+    for (let i = 0; i < ids.length; i++) {
+      if (i > 0) await sleep(300);
+      const id = ids[i];
+      const event = eventMap.get(id);
+      if (!event) continue;
+
       const location = event.geo_address_json
         ? [event.geo_address_json.city, event.geo_address_json.country]
             .filter(Boolean)
-            .join(", ")
+            .join(", ") || "In-person"
         : "Online";
 
-      for (const guest of guests) {
-        const key = `${guest.user_email}-${event.api_id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-
-        const isHost = hostEmails.has(guest.user_email.toLowerCase());
+      const guests: LumaGuest[] = await fetchGuestsForEvent(id);
+      for (const g of guests) {
         rows.push({
-          name: guest.user_name,
-          email: guest.user_email,
-          role: isHost ? "host" : "guest",
+          name: g.user_name,
+          email: g.user_email,
+          role: "attendee",
           eventName: event.name,
-          eventId: event.api_id,
+          eventId: id,
           location,
         });
       }

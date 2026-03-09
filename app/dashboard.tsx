@@ -18,7 +18,7 @@ interface LumaEvent {
 interface PersonRow {
   name: string;
   email: string;
-  role: "host" | "guest";
+  role: "attendee";
   eventName: string;
   eventId: string;
   location: string;
@@ -29,7 +29,7 @@ interface LocationOption {
   country: string;
 }
 
-export default function Dashboard() {
+export default function Dashboard({ defaultStartDate }: { defaultStartDate: string }) {
   const [events, setEvents] = useState<LumaEvent[]>([]);
   const [people, setPeople] = useState<PersonRow[]>([]);
   const [locations, setLocations] = useState<LocationOption[]>([]);
@@ -38,7 +38,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingPeople, setLoadingPeople] = useState(false);
 
-  const [startDate, setStartDate] = useState("");
+  const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState("");
   const [selectedCity, setSelectedCity] = useState("");
   const [selectedCountry, setSelectedCountry] = useState("");
@@ -65,7 +65,6 @@ export default function Dashboard() {
       const data = await res.json();
       setEvents(data.events || []);
       setLocations(data.locations || []);
-      setLastRefreshed(data.lastRefreshed || "");
     } catch (err) {
       console.error("Failed to fetch events:", err);
     } finally {
@@ -133,7 +132,7 @@ export default function Dashboard() {
   const uniquePeople = new Map<string, PersonRow>();
   people.forEach((p) => {
     const existing = uniquePeople.get(p.email);
-    if (!existing || p.role === "host") {
+    if (!existing) {
       uniquePeople.set(p.email, p);
     }
   });
@@ -450,11 +449,7 @@ export default function Dashboard() {
                         </td>
                         <td className="px-4 py-3">
                           <span
-                            className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                              person.role === "host"
-                                ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-                                : "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                            }`}
+                            className="inline-block rounded-full px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
                           >
                             {person.role}
                           </span>

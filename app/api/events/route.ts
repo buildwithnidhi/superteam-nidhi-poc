@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getData } from "@/lib/luma";
+import { NextRequest, NextResponse, connection } from "next/server";
+import { fetchEvents } from "@/lib/luma";
+
 
 export async function GET(request: NextRequest) {
+  await connection(); // opts out of prerendering
   try {
     const { searchParams } = request.nextUrl;
     const startDate = searchParams.get("startDate");
@@ -9,8 +11,8 @@ export async function GET(request: NextRequest) {
     const city = searchParams.get("city");
     const country = searchParams.get("country");
 
-    const data = await getData();
-    let events = data.events;
+    // fetchEvents() is cached for 24h — all users share this result
+    let events = await fetchEvents();
 
     if (startDate) {
       const start = new Date(startDate);
@@ -23,8 +25,7 @@ export async function GET(request: NextRequest) {
     }
     if (city) {
       events = events.filter(
-        (e) =>
-          e.geo_address_json?.city?.toLowerCase() === city.toLowerCase()
+        (e) => e.geo_address_json?.city?.toLowerCase() === city.toLowerCase()
       );
     }
     if (country) {
@@ -34,9 +35,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Extract unique locations for filter options
     const locations = new Map<string, { city: string; country: string }>();
-    data.events.forEach((e) => {
+    for (const e of events) {
       const geo = e.geo_address_json;
       if (geo?.city && geo?.country) {
         locations.set(`${geo.city}-${geo.country}`, {
@@ -44,12 +44,11 @@ export async function GET(request: NextRequest) {
           country: geo.country,
         });
       }
-    });
+    }
 
     return NextResponse.json({
       events,
       locations: Array.from(locations.values()),
-      lastRefreshed: data.lastRefreshed,
     });
   } catch (error) {
     console.error("Failed to fetch events:", error);
