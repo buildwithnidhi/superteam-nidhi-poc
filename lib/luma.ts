@@ -12,7 +12,7 @@ function headers() {
 // Called by multiple users — they all share this single cached response.
 export async function fetchEvents(): Promise<LumaEvent[]> {
   "use cache";
-  cacheLife("days");
+  cacheLife("luma");
   cacheTag("luma-events");
 
   const all: LumaEvent[] = [];
