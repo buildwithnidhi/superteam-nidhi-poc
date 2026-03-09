@@ -7,6 +7,10 @@ const API_KEY = process.env.LUMA_API_KEY || "";
 const CACHE_FILE = path.join(process.cwd(), ".cache", "luma-data.json");
 const CACHE_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 
+// Luma rate limit: 300 req/min per calendar (5 req/sec).
+// We stay well under by delaying between paginated pages and guest batches.
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function headers() {
   return { "x-luma-api-key": API_KEY };
 }
@@ -21,7 +25,10 @@ async function fetchAllPages<T>(
   do {
     const params = new URLSearchParams();
     params.set("pagination_limit", "100");
-    if (cursor) params.set("pagination_cursor", cursor);
+    if (cursor) {
+      params.set("pagination_cursor", cursor);
+      await sleep(300); // 300ms between pages ~= max 3 req/sec per paginated call
+    }
     const sep = url.includes("?") ? "&" : "?";
     const res = await fetch(`${url}${sep}${params}`, { headers: headers() });
     if (!res.ok) throw new Error(`Luma API error: ${res.status}`);
@@ -123,10 +130,13 @@ export async function getData(forceRefresh = false): Promise<CachedData> {
 
   const [events, people] = await Promise.all([fetchEvents(), fetchPeople()]);
 
-  // Fetch guests for all events (in batches to avoid rate limiting)
+  // Fetch guests for all events in small batches with delays to stay under
+  // Luma's 300 req/min limit. Each batch of 5 concurrent requests, 2s between
+  // batches = max ~150 req/min for this section alone.
   const eventGuests: Record<string, LumaGuest[]> = {};
-  const batchSize = 10;
+  const batchSize = 5;
   for (let i = 0; i < events.length; i += batchSize) {
+    if (i > 0) await sleep(2000);
     const batch = events.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map((e) => fetchEventGuests(e.api_id))
