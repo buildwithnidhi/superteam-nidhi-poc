@@ -356,13 +356,14 @@ export async function getEvents(forceRefresh = false): Promise<{
   lastRefreshed: string;
 }> {
   const lastSync = await getLastSyncTime("events");
-  const stale = !lastSync || Date.now() - lastSync.getTime() > CACHE_TTL_MS;
 
-  if (!forceRefresh && !stale) {
+  if (!forceRefresh && lastSync) {
+    console.log("[luma] Serving events from Aiven DB (last synced:", lastSync.toISOString(), ")");
     const events = await getEventsFromDb();
-    return { events, lastRefreshed: lastSync!.toISOString() };
+    return { events, lastRefreshed: lastSync.toISOString() };
   }
 
+  console.log("[luma] No sync record found — fetching from Luma API and seeding DB");
   const events = await fetchEvents();
   await upsertEvents(events);
   await logSync("events", { events: events.length }, "success");
