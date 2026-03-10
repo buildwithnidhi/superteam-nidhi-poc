@@ -4,7 +4,9 @@ import path from "path";
 
 const API_BASE = "https://public-api.luma.com/v1";
 const API_KEY = process.env.LUMA_API_KEY || "";
-const CACHE_FILE = path.join(process.cwd(), ".cache", "luma-data.json");
+// On Vercel, process.cwd() is read-only — use /tmp for writable cache
+const CACHE_DIR = process.env.VERCEL ? "/tmp" : path.join(process.cwd(), ".cache");
+const CACHE_FILE = path.join(CACHE_DIR, "luma-data.json");
 const CACHE_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 const PEOPLE_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days — separate TTL for people
 
@@ -168,9 +170,13 @@ export function getPeopleFromCache(): LumaPerson[] {
 }
 
 function writeCache(data: CachedData) {
-  const dir = path.dirname(CACHE_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(CACHE_FILE, JSON.stringify(data));
+  try {
+    const dir = path.dirname(CACHE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(data));
+  } catch (err) {
+    console.warn("Cache write failed (read-only filesystem?):", err);
+  }
 }
 
 export async function getEvents(forceRefresh = false): Promise<{
