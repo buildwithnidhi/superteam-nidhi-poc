@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { getPool } from "@/lib/db";
+import { db } from "@/lib/db";
+import { lumaEvents, lumaSyncLog } from "@/lib/schema";
+import { desc, eq, sql } from "drizzle-orm";
 
 const API_BASE = "https://public-api.luma.com/v1";
 const API_KEY = process.env.LUMA_API_KEY || "";
@@ -23,14 +25,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const pool = getPool();
-
   // Get the last sync time
-  const [rows] = await pool.execute(
-    `SELECT synced_at FROM luma_sync_log WHERE sync_type = 'events' AND status = 'success' ORDER BY synced_at DESC LIMIT 1`
-  ) as [Array<{ synced_at: Date }>, unknown];
+  const syncRows = await db
+    .select({ syncedAt: lumaSyncLog.syncedAt })
+    .from(lumaSyncLog)
+    .where(eq(lumaSyncLog.syncType, "events"))
+    .orderBy(desc(lumaSyncLog.syncedAt))
+    .limit(1);
 
-  const lastSync = rows.length ? rows[0].synced_at : new Date("2026-01-01");
+  const lastSync = syncRows.length ? syncRows[0].syncedAt! : new Date("2026-01-01");
 
   // Fetch only recent events (sorted by start_at desc, stop when older than lastSync)
   const newEvents: Record<string, unknown>[] = [];
@@ -62,25 +65,43 @@ export async function GET(request: Request) {
   } while (cursor && !done);
 
   // Upsert new events into DB
-  const upsertSql = "INSERT INTO luma_events (event_api_id, title, start_at, end_at, geo_city, geo_country, cover_url, url, geo_address_json, creator_api_id, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE title=VALUES(title), start_at=VALUES(start_at), end_at=VALUES(end_at), geo_city=VALUES(geo_city), geo_country=VALUES(geo_country), cover_url=VALUES(cover_url), url=VALUES(url), geo_address_json=VALUES(geo_address_json), updated_at=CURRENT_TIMESTAMP";
   for (const ev of newEvents) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (pool as any).execute(upsertSql, [
-      ev.api_id, ev.name,
-      ev.start_at ? new Date(ev.start_at as string) : null,
-      ev.end_at ? new Date(ev.end_at as string) : null,
-      (ev.geo_address_json as Record<string, string> | null)?.city || null,
-      (ev.geo_address_json as Record<string, string> | null)?.country || null,
-      ev.cover_url || null, ev.url || null,
-      ev.geo_address_json ? JSON.stringify(ev.geo_address_json) : null,
-      ev.user_api_id || null, ev.timezone || null,
-    ]);
+    await db
+      .insert(lumaEvents)
+      .values({
+        eventApiId: ev.api_id as string,
+        title: ev.name as string,
+        startAt: ev.start_at ? new Date(ev.start_at as string) : null,
+        endAt: ev.end_at ? new Date(ev.end_at as string) : null,
+        geoCity: (ev.geo_address_json as Record<string, string> | null)?.city || null,
+        geoCountry: (ev.geo_address_json as Record<string, string> | null)?.country || null,
+        coverUrl: (ev.cover_url as string) || null,
+        url: (ev.url as string) || null,
+        geoAddressJson: ev.geo_address_json || null,
+        creatorApiId: (ev.user_api_id as string) || null,
+        timezone: (ev.timezone as string) || null,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          title: sql`VALUES(${lumaEvents.title})`,
+          startAt: sql`VALUES(${lumaEvents.startAt})`,
+          endAt: sql`VALUES(${lumaEvents.endAt})`,
+          geoCity: sql`VALUES(${lumaEvents.geoCity})`,
+          geoCountry: sql`VALUES(${lumaEvents.geoCountry})`,
+          coverUrl: sql`VALUES(${lumaEvents.coverUrl})`,
+          url: sql`VALUES(${lumaEvents.url})`,
+          geoAddressJson: sql`VALUES(${lumaEvents.geoAddressJson})`,
+          updatedAt: sql`CURRENT_TIMESTAMP`,
+        },
+      });
   }
 
-  await pool.execute(
-    "INSERT INTO luma_sync_log (sync_type, events_count, people_count, status) VALUES ('events', ?, 0, 'success')",
-    [newEvents.length]
-  );
+  await db.insert(lumaSyncLog).values({
+    syncType: "events",
+    eventsCount: newEvents.length,
+    peopleCount: 0,
+    status: "success",
+  });
 
   return NextResponse.json({ success: true, newEvents: newEvents.length, since: lastSync });
 }

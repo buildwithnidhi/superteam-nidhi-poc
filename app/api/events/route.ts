@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEvents } from "@/lib/luma";
-import { getPool } from "@/lib/db";
+import { db } from "@/lib/db";
+import { lumaGuests } from "@/lib/schema";
+import { eq, count, sum, sql, inArray } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   try {
@@ -48,20 +50,24 @@ export async function GET(request: NextRequest) {
     });
 
     // Fetch guest counts from DB for all filtered events
-    const pool = getPool();
     const eventIds = events.map((e) => e.api_id);
     let guestCounts: Record<string, { registered: number; approved: number }> = {};
     if (eventIds.length > 0) {
-      const placeholders = eventIds.map(() => "?").join(",");
-      const [rows] = await pool.execute(
-        `SELECT event_api_id,
-          COUNT(*) as registered,
-          SUM(approval_status = 'approved') as approved
-         FROM luma_guests WHERE event_api_id IN (${placeholders}) GROUP BY event_api_id`,
-        eventIds
-      ) as [Array<{ event_api_id: string; registered: number; approved: number }>, unknown];
+      const rows = await db
+        .select({
+          eventApiId: lumaGuests.eventApiId,
+          registered: count(),
+          approved: sum(sql`${lumaGuests.approvalStatus} = 'approved'`),
+        })
+        .from(lumaGuests)
+        .where(inArray(lumaGuests.eventApiId, eventIds))
+        .groupBy(lumaGuests.eventApiId);
+
       rows.forEach((r) => {
-        guestCounts[r.event_api_id] = { registered: r.registered, approved: Number(r.approved) };
+        guestCounts[r.eventApiId] = {
+          registered: r.registered,
+          approved: Number(r.approved) || 0,
+        };
       });
     }
 

@@ -1,5 +1,14 @@
 import { LumaEvent, LumaGuest, LumaHost, LumaPerson, CachedData } from "./types";
-import { getPool } from "./db";
+import { db } from "./db";
+import {
+  lumaEvents,
+  lumaPeople,
+  lumaGuests,
+  lumaHosts,
+  lumaEventHosts,
+  lumaSyncLog,
+} from "./schema";
+import { eq, desc, sql, count } from "drizzle-orm";
 
 const API_BASE = "https://public-api.luma.com/v1";
 const API_KEY = process.env.LUMA_API_KEY || "";
@@ -138,210 +147,268 @@ export async function fetchEventHosts(eventId: string): Promise<LumaHost[]> {
   }
 }
 
-// ─── DB helpers ───────────────────────────────────────────────────────────────
+// ─── DB helpers (Drizzle) ─────────────────────────────────────────────────────
 
 async function getLastSyncTime(syncType: string): Promise<Date | null> {
-  const pool = getPool();
-  const [rows] = await pool.execute(
-    `SELECT synced_at FROM luma_sync_log WHERE sync_type = ? AND status = 'success' ORDER BY synced_at DESC LIMIT 1`,
-    [syncType]
-  ) as [Array<{ synced_at: Date }>, unknown];
-  return rows.length ? rows[0].synced_at : null;
+  const rows = await db
+    .select({ syncedAt: lumaSyncLog.syncedAt })
+    .from(lumaSyncLog)
+    .where(eq(lumaSyncLog.syncType, syncType))
+    .orderBy(desc(lumaSyncLog.syncedAt))
+    .limit(1);
+  return rows.length ? rows[0].syncedAt : null;
 }
 
 async function upsertEvents(events: LumaEvent[]): Promise<void> {
-  const pool = getPool();
   for (const ev of events) {
-    await pool.execute(
-      `INSERT INTO luma_events (event_api_id, title, start_at, end_at, geo_city, geo_country, cover_url, url, geo_address_json, creator_api_id, timezone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE title=VALUES(title), start_at=VALUES(start_at), end_at=VALUES(end_at),
-         geo_city=VALUES(geo_city), geo_country=VALUES(geo_country), cover_url=VALUES(cover_url),
-         url=VALUES(url), geo_address_json=VALUES(geo_address_json), creator_api_id=VALUES(creator_api_id),
-         timezone=VALUES(timezone), updated_at=CURRENT_TIMESTAMP`,
-      [
-        ev.api_id,
-        ev.name,
-        ev.start_at ? new Date(ev.start_at) : null,
-        ev.end_at ? new Date(ev.end_at) : null,
-        ev.geo_address_json?.city || null,
-        ev.geo_address_json?.country || null,
-        ev.cover_url,
-        ev.url,
-        ev.geo_address_json ? JSON.stringify(ev.geo_address_json) : null,
-        ev.creator_api_id,
-        ev.timezone,
-      ]
-    );
+    await db
+      .insert(lumaEvents)
+      .values({
+        eventApiId: ev.api_id,
+        title: ev.name,
+        startAt: ev.start_at ? new Date(ev.start_at) : null,
+        endAt: ev.end_at ? new Date(ev.end_at) : null,
+        geoCity: ev.geo_address_json?.city || null,
+        geoCountry: ev.geo_address_json?.country || null,
+        coverUrl: ev.cover_url,
+        url: ev.url,
+        geoAddressJson: ev.geo_address_json || null,
+        creatorApiId: ev.creator_api_id,
+        timezone: ev.timezone,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          title: sql`VALUES(${lumaEvents.title})`,
+          startAt: sql`VALUES(${lumaEvents.startAt})`,
+          endAt: sql`VALUES(${lumaEvents.endAt})`,
+          geoCity: sql`VALUES(${lumaEvents.geoCity})`,
+          geoCountry: sql`VALUES(${lumaEvents.geoCountry})`,
+          coverUrl: sql`VALUES(${lumaEvents.coverUrl})`,
+          url: sql`VALUES(${lumaEvents.url})`,
+          geoAddressJson: sql`VALUES(${lumaEvents.geoAddressJson})`,
+          creatorApiId: sql`VALUES(${lumaEvents.creatorApiId})`,
+          timezone: sql`VALUES(${lumaEvents.timezone})`,
+          updatedAt: sql`CURRENT_TIMESTAMP`,
+        },
+      });
   }
 }
 
 async function getEventsFromDb(): Promise<LumaEvent[]> {
-  const pool = getPool();
-  const [rows] = await pool.execute(
-    `SELECT event_api_id, title, start_at, end_at, geo_address_json, cover_url, url, creator_api_id, timezone FROM luma_events
-     ORDER BY CASE WHEN start_at >= NOW() THEN 0 ELSE 1 END, ABS(TIMESTAMPDIFF(SECOND, start_at, NOW()))`
-  ) as [Array<Record<string, unknown>>, unknown];
+  const rows = await db
+    .select({
+      eventApiId: lumaEvents.eventApiId,
+      title: lumaEvents.title,
+      startAt: lumaEvents.startAt,
+      endAt: lumaEvents.endAt,
+      geoAddressJson: lumaEvents.geoAddressJson,
+      coverUrl: lumaEvents.coverUrl,
+      url: lumaEvents.url,
+      creatorApiId: lumaEvents.creatorApiId,
+      timezone: lumaEvents.timezone,
+    })
+    .from(lumaEvents)
+    .orderBy(
+      sql`CASE WHEN ${lumaEvents.startAt} >= NOW() THEN 0 ELSE 1 END`,
+      sql`ABS(TIMESTAMPDIFF(SECOND, ${lumaEvents.startAt}, NOW()))`
+    );
 
   return rows.map((r) => ({
-    api_id: r.event_api_id as string,
-    name: r.title as string,
-    start_at: (r.start_at as Date).toISOString(),
-    end_at: r.end_at ? (r.end_at as Date).toISOString() : "",
-    url: r.url as string | null,
-    cover_url: r.cover_url as string | null,
-    geo_address_json: r.geo_address_json
-      ? (typeof r.geo_address_json === "string" ? JSON.parse(r.geo_address_json) : r.geo_address_json)
-      : null,
+    api_id: r.eventApiId,
+    name: r.title,
+    start_at: r.startAt ? r.startAt.toISOString() : "",
+    end_at: r.endAt ? r.endAt.toISOString() : "",
+    url: r.url,
+    cover_url: r.coverUrl,
+    geo_address_json: r.geoAddressJson as LumaEvent["geo_address_json"],
     geo_latitude: null,
     geo_longitude: null,
-    timezone: r.timezone as string | null,
-    creator_api_id: r.creator_api_id as string | null,
+    timezone: r.timezone,
+    creator_api_id: r.creatorApiId,
   }));
 }
 
 async function upsertPeople(people: LumaPerson[]): Promise<void> {
-  const pool = getPool();
   for (const p of people) {
-    await pool.execute(
-      `INSERT INTO luma_people (person_api_id, email, user_name, avatar_url, event_approved_count, event_checked_in_count, tags)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE email=VALUES(email), user_name=VALUES(user_name), avatar_url=VALUES(avatar_url),
-         event_approved_count=VALUES(event_approved_count), event_checked_in_count=VALUES(event_checked_in_count),
-         tags=VALUES(tags), updated_at=CURRENT_TIMESTAMP`,
-      [
-        p.api_id,
-        p.email,
-        p.user?.name || null,
-        p.user?.avatar_url || null,
-        p.event_approved_count,
-        p.event_checked_in_count,
-        JSON.stringify(p.tags),
-      ]
-    );
+    await db
+      .insert(lumaPeople)
+      .values({
+        personApiId: p.api_id,
+        email: p.email,
+        userName: p.user?.name || null,
+        avatarUrl: p.user?.avatar_url || null,
+        eventApprovedCount: p.event_approved_count,
+        eventCheckedInCount: p.event_checked_in_count,
+        tags: p.tags,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          email: sql`VALUES(${lumaPeople.email})`,
+          userName: sql`VALUES(${lumaPeople.userName})`,
+          avatarUrl: sql`VALUES(${lumaPeople.avatarUrl})`,
+          eventApprovedCount: sql`VALUES(${lumaPeople.eventApprovedCount})`,
+          eventCheckedInCount: sql`VALUES(${lumaPeople.eventCheckedInCount})`,
+          tags: sql`VALUES(${lumaPeople.tags})`,
+          updatedAt: sql`CURRENT_TIMESTAMP`,
+        },
+      });
   }
 }
 
 async function getPeopleFromDb(): Promise<LumaPerson[]> {
-  const pool = getPool();
-  const [rows] = await pool.execute(
-    `SELECT person_api_id, email, user_name, avatar_url, event_approved_count, event_checked_in_count, tags, created_at FROM luma_people`
-  ) as [Array<Record<string, unknown>>, unknown];
+  const rows = await db
+    .select({
+      personApiId: lumaPeople.personApiId,
+      email: lumaPeople.email,
+      userName: lumaPeople.userName,
+      avatarUrl: lumaPeople.avatarUrl,
+      eventApprovedCount: lumaPeople.eventApprovedCount,
+      eventCheckedInCount: lumaPeople.eventCheckedInCount,
+      tags: lumaPeople.tags,
+      createdAt: lumaPeople.createdAt,
+    })
+    .from(lumaPeople);
 
   return rows.map((r) => ({
-    api_id: r.person_api_id as string,
-    email: r.email as string,
-    created_at: (r.created_at as Date).toISOString(),
-    event_approved_count: r.event_approved_count as number,
-    event_checked_in_count: r.event_checked_in_count as number,
-    tags: r.tags ? JSON.parse(r.tags as string) : [],
+    api_id: r.personApiId,
+    email: r.email || "",
+    created_at: r.createdAt ? r.createdAt.toISOString() : "",
+    event_approved_count: r.eventApprovedCount ?? 0,
+    event_checked_in_count: r.eventCheckedInCount ?? 0,
+    tags: r.tags ? (r.tags as Array<{ api_id: string; name: string }>) : [],
     user: {
-      api_id: r.person_api_id as string,
-      email: r.email as string,
-      name: r.user_name as string || "",
+      api_id: r.personApiId,
+      email: r.email || "",
+      name: r.userName || "",
       first_name: null,
       last_name: null,
-      avatar_url: r.avatar_url as string | null,
+      avatar_url: r.avatarUrl,
     },
   }));
 }
 
 async function upsertGuests(eventId: string, guests: LumaGuest[]): Promise<void> {
-  const pool = getPool();
   for (const g of guests) {
-    await pool.execute(
-      `INSERT INTO luma_guests (event_api_id, user_api_id, name, email, approval_status, registered_at, checked_in_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE name=VALUES(name), email=VALUES(email),
-         approval_status=VALUES(approval_status), registered_at=VALUES(registered_at), checked_in_at=VALUES(checked_in_at)`,
-      [
-        eventId,
-        g.user_api_id || g.api_id,
-        g.user_name,
-        g.user_email,
-        g.approval_status,
-        g.registered_at ? new Date(g.registered_at) : null,
-        g.checked_in_at ? new Date(g.checked_in_at) : null,
-      ]
-    );
+    await db
+      .insert(lumaGuests)
+      .values({
+        eventApiId: eventId,
+        userApiId: g.user_api_id || g.api_id,
+        name: g.user_name,
+        email: g.user_email,
+        approvalStatus: g.approval_status,
+        registeredAt: g.registered_at ? new Date(g.registered_at) : null,
+        checkedInAt: g.checked_in_at ? new Date(g.checked_in_at) : null,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          name: sql`VALUES(${lumaGuests.name})`,
+          email: sql`VALUES(${lumaGuests.email})`,
+          approvalStatus: sql`VALUES(${lumaGuests.approvalStatus})`,
+          registeredAt: sql`VALUES(${lumaGuests.registeredAt})`,
+          checkedInAt: sql`VALUES(${lumaGuests.checkedInAt})`,
+        },
+      });
   }
 }
 
 async function getGuestsFromDb(eventId: string): Promise<LumaGuest[]> {
-  const pool = getPool();
-  const [rows] = await pool.execute(
-    `SELECT user_api_id, name, email, approval_status, registered_at, checked_in_at FROM luma_guests WHERE event_api_id = ?`,
-    [eventId]
-  ) as [Array<Record<string, unknown>>, unknown];
+  const rows = await db
+    .select({
+      userApiId: lumaGuests.userApiId,
+      name: lumaGuests.name,
+      email: lumaGuests.email,
+      approvalStatus: lumaGuests.approvalStatus,
+      registeredAt: lumaGuests.registeredAt,
+      checkedInAt: lumaGuests.checkedInAt,
+    })
+    .from(lumaGuests)
+    .where(eq(lumaGuests.eventApiId, eventId));
 
   return rows.map((r) => ({
-    api_id: r.user_api_id as string,
-    user_api_id: r.user_api_id as string | null,
-    user_name: r.name as string,
-    user_email: r.email as string,
-    approval_status: r.approval_status as string,
-    registered_at: r.registered_at ? (r.registered_at as Date).toISOString() : null,
-    checked_in_at: r.checked_in_at ? (r.checked_in_at as Date).toISOString() : null,
+    api_id: r.userApiId,
+    user_api_id: r.userApiId,
+    user_name: r.name || "",
+    user_email: r.email || "",
+    approval_status: r.approvalStatus || "",
+    registered_at: r.registeredAt ? r.registeredAt.toISOString() : null,
+    checked_in_at: r.checkedInAt ? r.checkedInAt.toISOString() : null,
   }));
 }
 
 async function hasGuestsInDb(eventId: string): Promise<boolean> {
-  const pool = getPool();
-  const [rows] = await pool.execute(
-    `SELECT COUNT(*) as cnt FROM luma_guests WHERE event_api_id = ?`,
-    [eventId]
-  ) as [Array<{ cnt: number }>, unknown];
+  const rows = await db
+    .select({ cnt: count() })
+    .from(lumaGuests)
+    .where(eq(lumaGuests.eventApiId, eventId));
   return rows[0].cnt > 0;
 }
 
 async function upsertHosts(eventId: string, hosts: LumaHost[]): Promise<void> {
-  const pool = getPool();
   for (const h of hosts) {
-    await pool.execute(
-      `INSERT INTO luma_hosts (host_api_id, name, email, avatar_url) VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE name=VALUES(name), email=VALUES(email), avatar_url=VALUES(avatar_url)`,
-      [h.api_id, h.name, h.email, h.avatar_url]
-    );
-    await pool.execute(
-      `INSERT IGNORE INTO luma_event_hosts (event_api_id, host_api_id) VALUES (?, ?)`,
-      [eventId, h.api_id]
-    );
+    await db
+      .insert(lumaHosts)
+      .values({
+        hostApiId: h.api_id,
+        name: h.name,
+        email: h.email,
+        avatarUrl: h.avatar_url,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          name: sql`VALUES(${lumaHosts.name})`,
+          email: sql`VALUES(${lumaHosts.email})`,
+          avatarUrl: sql`VALUES(${lumaHosts.avatarUrl})`,
+        },
+      });
+
+    await db
+      .insert(lumaEventHosts)
+      .values({
+        eventApiId: eventId,
+        hostApiId: h.api_id,
+      })
+      .onDuplicateKeyUpdate({
+        set: { eventApiId: sql`VALUES(${lumaEventHosts.eventApiId})` },
+      });
   }
 }
 
 async function getHostsFromDb(eventId: string): Promise<LumaHost[]> {
-  const pool = getPool();
-  const [rows] = await pool.execute(
-    `SELECT h.host_api_id, h.name, h.email, h.avatar_url
-     FROM luma_hosts h
-     JOIN luma_event_hosts eh ON h.host_api_id = eh.host_api_id
-     WHERE eh.event_api_id = ?`,
-    [eventId]
-  ) as [Array<Record<string, unknown>>, unknown];
+  const rows = await db
+    .select({
+      hostApiId: lumaHosts.hostApiId,
+      name: lumaHosts.name,
+      email: lumaHosts.email,
+      avatarUrl: lumaHosts.avatarUrl,
+    })
+    .from(lumaHosts)
+    .innerJoin(lumaEventHosts, eq(lumaHosts.hostApiId, lumaEventHosts.hostApiId))
+    .where(eq(lumaEventHosts.eventApiId, eventId));
 
   return rows.map((r) => ({
-    api_id: r.host_api_id as string,
-    name: r.name as string,
-    email: r.email as string,
-    avatar_url: r.avatar_url as string | null,
+    api_id: r.hostApiId,
+    name: r.name || "",
+    email: r.email || "",
+    avatar_url: r.avatarUrl,
   }));
 }
 
 async function hasHostsInDb(eventId: string): Promise<boolean> {
-  const pool = getPool();
-  const [rows] = await pool.execute(
-    `SELECT COUNT(*) as cnt FROM luma_event_hosts WHERE event_api_id = ?`,
-    [eventId]
-  ) as [Array<{ cnt: number }>, unknown];
+  const rows = await db
+    .select({ cnt: count() })
+    .from(lumaEventHosts)
+    .where(eq(lumaEventHosts.eventApiId, eventId));
   return rows[0].cnt > 0;
 }
 
 async function logSync(syncType: string, counts: { events?: number; people?: number }, status: string) {
-  const pool = getPool();
-  await pool.execute(
-    `INSERT INTO luma_sync_log (sync_type, events_count, people_count, status) VALUES (?, ?, ?, ?)`,
-    [syncType, counts.events ?? 0, counts.people ?? 0, status]
-  );
+  await db.insert(lumaSyncLog).values({
+    syncType,
+    eventsCount: counts.events ?? 0,
+    peopleCount: counts.people ?? 0,
+    status,
+  });
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────

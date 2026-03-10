@@ -1,4 +1,6 @@
 import mysql from "mysql2/promise";
+import { drizzle } from "drizzle-orm/mysql2";
+import * as schema from "./schema";
 
 let pool: mysql.Pool | null = null;
 
@@ -18,3 +20,5 @@ export function getPool(): mysql.Pool {
   }
   return pool;
 }
+
+export const db = drizzle({ client: getPool(), schema, mode: "default" });
