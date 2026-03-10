@@ -8,9 +8,12 @@
     "start": "next start",
     "lint": "eslint",
     "digest": "node scripts/grass-fund-digest.mjs",
-    "digest:now": "node scripts/grass-fund-digest.mjs --now"
+    "digest:now": "node scripts/grass-fund-digest.mjs --now",
+    "import-csv": "node scripts/import-grass-fund-csv.mjs",
+    "migrate-grass-fund": "node scripts/migrate-grass-fund.mjs"
   },
   "dependencies": {
+    "csv-parse": "^6.1.0",
     "dotenv": "^17.3.1",
     "lucide-react": "^0.577.0",
     "mysql2": "^3.19.1",
