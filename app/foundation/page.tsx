@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   Globe,
   Tag,
-  Loader2,
   ChevronDown,
   ChevronUp,
   ArrowRight,
@@ -200,7 +199,7 @@ function PasswordGate({ onAuth }: { onAuth: (password: string) => void }) {
                   placeholder="Enter access key"
                   autoFocus
                   style={{ fontFamily: font.body }}
-                  className="w-full bg-transparent text-[15px] text-black pb-3 focus:outline-none placeholder:text-black/20 tracking-wide"
+                  className="w-full bg-transparent text-[15px] text-black pb-3 focus:outline-none placeholder:text-black/45 tracking-wide"
                 />
               </div>
             </div>
@@ -239,7 +238,7 @@ function PasswordGate({ onAuth }: { onAuth: (password: string) => void }) {
             <div className="h-px w-8 bg-black/10" />
             <span
               style={{ fontFamily: font.mono }}
-              className="text-[9px] text-black/20 tracking-[0.2em] uppercase"
+              className="text-[9px] text-black/45 tracking-[0.2em] uppercase"
             >
               Encrypted & Secure
             </span>
@@ -329,7 +328,7 @@ function BatchDashboard({
             <div key={stat.label} className="bg-white p-6">
               <div
                 style={{ fontFamily: font.display, color: stat.value > 0 ? stat.color : undefined }}
-                className={`text-[36px] leading-none ${stat.value === 0 ? "text-black/20" : ""}`}
+                className={`text-[36px] leading-none ${stat.value === 0 ? "text-black/45" : ""}`}
               >
                 {stat.value}
               </div>
@@ -359,7 +358,7 @@ function BatchDashboard({
         {/* Batches list */}
         {batches.length === 0 ? (
           <div className="border border-black/[0.06] py-20 text-center">
-            <Clock className="w-5 h-5 text-black/15 mx-auto mb-3" strokeWidth={1.5} />
+            <Clock className="w-5 h-5 text-black/35 mx-auto mb-3" strokeWidth={1.5} />
             <p className="text-[13px] text-black/30 tracking-wide">
               No batches have been submitted yet
             </p>
@@ -442,7 +441,7 @@ function BatchDashboard({
                       : "Needs Review"}
                   </span>
                   <ArrowUpRight
-                    className="w-4 h-4 text-black/15 group-hover:text-black/50 transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                    className="w-4 h-4 text-black/35 group-hover:text-black/50 transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
                     strokeWidth={1.5}
                   />
                 </div>
@@ -472,11 +471,24 @@ function BatchReview({
   const [decisions, setDecisions] = useState<Record<string, PaymentDecision>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [serverDecided, setServerDecided] = useState<Set<string>>(new Set());
+  const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(new Set());
+  // checked = IDs selected for submission in the current session
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
-  const [alreadyReviewed, setAlreadyReviewed] = useState(false);
-  const [activeTab, setActiveTab] = useState<"pending" | "reviewed">("pending");
+  const [activeTab, setActiveTab] = useState<"pending" | "completed">("pending");
+
+  const isSubmitted = (id: string) => serverDecided.has(id) || locallySubmitted.has(id);
+
+  const isReadyToCheck = (id: string) => {
+    if (isSubmitted(id)) return false;
+    const dec = decisions[id];
+    if (!dec) return false;
+    if (dec.decision === "accepted") return true;
+    if (dec.decision === "rejected") return dec.reason.trim().length > 0;
+    return false;
+  };
 
   const loadBatch = useCallback(async () => {
     try {
@@ -518,44 +530,26 @@ function BatchReview({
         })
       );
 
-      const allDecided = (data.records || []).every(
-        (r: { fields: { "Foundation Decision"?: string } }) =>
-          r.fields["Foundation Decision"] === "Accepted" ||
-          r.fields["Foundation Decision"] === "Rejected"
+      const decided = new Set<string>();
+      const initialDecisions: Record<string, PaymentDecision> = {};
+      (data.records || []).forEach(
+        (r: { id: string; fields: { "Foundation Decision"?: string; "Rejection Reason"?: string } }) => {
+          const dec = r.fields["Foundation Decision"];
+          if (dec === "Accepted" || dec === "Rejected") {
+            decided.add(r.id);
+            initialDecisions[r.id] = {
+              decision: dec === "Accepted" ? "accepted" : "rejected",
+              reason: r.fields["Rejection Reason"] || "",
+            };
+          } else {
+            initialDecisions[r.id] = { decision: "pending", reason: "" };
+          }
+        }
       );
 
       setPayments(mapped);
-
-      if (allDecided && mapped.length > 0) {
-        setAlreadyReviewed(true);
-        const existingDecisions: Record<string, PaymentDecision> = {};
-        (data.records || []).forEach(
-          (r: { id: string; fields: { "Foundation Decision"?: string; "Rejection Reason"?: string } }) => {
-            const dec = r.fields["Foundation Decision"];
-            existingDecisions[r.id] = {
-              decision: dec === "Accepted" ? "accepted" : dec === "Rejected" ? "rejected" : "pending",
-              reason: r.fields["Rejection Reason"] || "",
-            };
-          }
-        );
-        setDecisions(existingDecisions);
-      } else {
-        const initialDecisions: Record<string, PaymentDecision> = {};
-        (data.records || []).forEach(
-          (r: { id: string; fields: { "Foundation Decision"?: string; "Rejection Reason"?: string } }) => {
-            const dec = r.fields["Foundation Decision"];
-            if (dec === "Accepted" || dec === "Rejected") {
-              initialDecisions[r.id] = {
-                decision: dec === "Accepted" ? "accepted" : "rejected",
-                reason: r.fields["Rejection Reason"] || "",
-              };
-            } else {
-              initialDecisions[r.id] = { decision: "pending", reason: "" };
-            }
-          }
-        );
-        setDecisions(initialDecisions);
-      }
+      setServerDecided(decided);
+      setDecisions(initialDecisions);
     } catch {
       setError("Network error. Please try again.");
     } finally {
@@ -568,43 +562,58 @@ function BatchReview({
   }, [loadBatch]);
 
   const setDecisionFn = (id: string, decision: Decision) => {
-    if (alreadyReviewed) return;
+    if (isSubmitted(id)) return;
     setDecisions((prev) => ({ ...prev, [id]: { ...prev[id], decision } }));
+    // Auto-check on accept; un-check on reject (needs reason first)
+    if (decision === "accepted") {
+      setChecked((prev) => new Set([...prev, id]));
+    } else {
+      setChecked((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    }
   };
 
   const setReason = (id: string, reason: string) => {
-    if (alreadyReviewed) return;
+    if (isSubmitted(id)) return;
     setDecisions((prev) => ({ ...prev, [id]: { ...prev[id], reason } }));
+    // Auto-check once reason is filled
+    if (reason.trim() && decisions[id]?.decision === "rejected") {
+      setChecked((prev) => new Set([...prev, id]));
+    } else if (!reason.trim()) {
+      setChecked((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    }
   };
 
-  const acceptAll = () => {
-    if (alreadyReviewed) return;
-    const next: Record<string, PaymentDecision> = {};
-    payments.forEach((p) => {
-      next[p.id] = { decision: "accepted", reason: "" };
+  const toggleChecked = (id: string) => {
+    if (!isReadyToCheck(id)) return;
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
     });
-    setDecisions(next);
   };
 
-  const pendingCount = Object.values(decisions).filter((d) => d.decision === "pending").length;
-  const acceptedCount = Object.values(decisions).filter((d) => d.decision === "accepted").length;
-  const rejectedCount = Object.values(decisions).filter((d) => d.decision === "rejected").length;
-
-  const canSubmit =
-    !alreadyReviewed &&
-    pendingCount === 0 &&
-    Object.entries(decisions).every(([, d]) => {
-      if (d.decision === "rejected") return d.reason.trim().length > 0;
-      return true;
+  const acceptAllPending = () => {
+    const pendingIds = payments
+      .filter((p) => !isSubmitted(p.id) && (decisions[p.id]?.decision || "pending") === "pending")
+      .map((p) => p.id);
+    setDecisions((prev) => {
+      const next = { ...prev };
+      pendingIds.forEach((id) => { next[id] = { decision: "accepted", reason: "" }; });
+      return next;
     });
+    setChecked((prev) => new Set([...prev, ...pendingIds]));
+  };
 
-  const submitDecisions = async () => {
+  const submitChecked = async () => {
+    const toSubmit = payments.filter((p) => checked.has(p.id) && isReadyToCheck(p.id));
+    if (!toSubmit.length) return;
     setSubmitting(true);
+    setError(null);
     try {
-      const decisionsArr = payments.map((p) => ({
+      const decisionsArr = toSubmit.map((p) => ({
         recordId: p.id,
-        decision: decisions[p.id]?.decision || "pending",
-        reason: decisions[p.id]?.reason || "",
+        decision: decisions[p.id].decision,
+        reason: decisions[p.id].reason || "",
         name: p.name,
         email: p.email,
         amount: p.amount,
@@ -619,8 +628,14 @@ function BatchReview({
       });
 
       const data = await res.json();
-      if (data.success) setSubmitted(true);
-      else setError(data.error || "Submission failed");
+      if (data.success) {
+        const ids = new Set(toSubmit.map((p) => p.id));
+        setLocallySubmitted((prev) => new Set([...prev, ...ids]));
+        setChecked((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
+        setActiveTab("completed");
+      } else {
+        setError(data.error || "Submission failed");
+      }
     } catch {
       setError("Network error during submission.");
     } finally {
@@ -630,7 +645,7 @@ function BatchReview({
 
   if (loading) return <FullScreenLoader />;
 
-  if (error) {
+  if (error && payments.length === 0) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center" style={{ fontFamily: font.body }}>
         <div className="text-center max-w-sm">
@@ -652,61 +667,9 @@ function BatchReview({
     );
   }
 
-  if (submitted) {
-    return (
-      <div className="min-h-screen bg-white flex items-center justify-center" style={{ fontFamily: font.body }}>
-        <div className="text-center max-w-md">
-          <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6" style={{ backgroundColor: clr.accept.dot }}>
-            <Check className="w-6 h-6 text-white" strokeWidth={2} />
-          </div>
-          <h2
-            style={{ fontFamily: font.display }}
-            className="text-[32px] font-light text-black mb-2 tracking-[-0.01em]"
-          >
-            Review <span className="italic">submitted</span>
-          </h2>
-          <p className="text-[13px] text-black/35 mb-8 tracking-wide">
-            Batch{" "}
-            <span style={{ fontFamily: font.mono }} className="text-black/50">
-              {batchId}
-            </span>{" "}
-            has been recorded
-          </p>
-
-          <div className="flex gap-[1px] bg-black/[0.06] max-w-[240px] mx-auto mb-10">
-            <div className="bg-white flex-1 py-4">
-              <div style={{ fontFamily: font.display }} className="text-[28px] font-light text-black">
-                {acceptedCount}
-              </div>
-              <div className="text-[9px] font-medium tracking-[0.15em] uppercase text-black/30 mt-1">
-                Accepted
-              </div>
-            </div>
-            <div className="bg-white flex-1 py-4">
-              <div style={{ fontFamily: font.display }} className="text-[28px] font-light text-black/60">
-                {rejectedCount}
-              </div>
-              <div className="text-[9px] font-medium tracking-[0.15em] uppercase text-black/30 mt-1">
-                Rejected
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={onBack}
-            className="inline-flex items-center gap-2 text-[12px] font-medium tracking-[0.1em] uppercase text-black/40 hover:text-black transition-colors duration-300"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" strokeWidth={1.5} />
-            Dashboard
-          </button>
-
-          <p className="text-[11px] text-black/20 mt-8 tracking-wide">
-            Recipients will receive email updates shortly
-          </p>
-        </div>
-      </div>
-    );
-  }
+  const pendingPayments = payments.filter((p) => !isSubmitted(p.id));
+  const completedPayments = payments.filter((p) => isSubmitted(p.id));
+  const checkedCount = [...checked].filter((id) => isReadyToCheck(id)).length;
 
   return (
     <div className="min-h-screen bg-white" style={{ fontFamily: font.body }}>
@@ -725,11 +688,7 @@ function BatchReview({
                 style={{ fontFamily: font.display }}
                 className="text-[20px] font-normal text-black tracking-[-0.01em]"
               >
-                {alreadyReviewed ? (
-                  <>Batch <span className="italic">Archive</span></>
-                ) : (
-                  <>Payment <span className="italic">Review</span></>
-                )}
+                Payment <span className="italic">Review</span>
               </h1>
               <p style={{ fontFamily: font.mono }} className="text-[10px] text-black/25 tracking-wider mt-0.5">
                 {batchId}
@@ -737,207 +696,217 @@ function BatchReview({
             </div>
           </div>
           <div className="flex items-center gap-5 text-[11px] tracking-wide">
-            {!alreadyReviewed && pendingCount > 0 && (
-              <span style={{ color: clr.pending.text }} className="opacity-70">{pendingCount} remaining</span>
+            {pendingPayments.length > 0 && (
+              <span style={{ color: clr.pending.text }} className="opacity-70">{pendingPayments.length} pending</span>
             )}
-            <span style={{ color: clr.accept.text }} className="opacity-80">{acceptedCount} accepted</span>
-            <span style={{ color: clr.reject.text }} className="opacity-60">{rejectedCount} rejected</span>
+            {completedPayments.length > 0 && (
+              <span style={{ color: clr.accept.text }} className="opacity-80">{completedPayments.length} completed</span>
+            )}
           </div>
         </div>
       </div>
 
       <div className="max-w-[960px] mx-auto px-8 py-8">
-        {/* Tabs + Action bar */}
-        {(() => {
-          const pendingPayments = payments.filter((p) => (decisions[p.id]?.decision || "pending") === "pending");
-          const reviewedPayments = payments.filter((p) => {
-            const d = decisions[p.id]?.decision || "pending";
-            return d === "accepted" || d === "rejected";
-          });
 
-          // Auto-switch to reviewed tab when no pending items
-          const effectiveTab = alreadyReviewed ? "reviewed" : (pendingPayments.length === 0 && activeTab === "pending" ? "reviewed" : activeTab);
-
-          return (
-            <>
-              {!alreadyReviewed && (
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-0 border border-black/[0.08]" style={{ borderRadius: "2px" }}>
-                    <button
-                      onClick={() => setActiveTab("pending")}
-                      className="px-5 py-2.5 text-[11px] font-medium tracking-[0.1em] uppercase transition-all duration-200"
-                      style={{
-                        backgroundColor: effectiveTab === "pending" ? "#111" : "transparent",
-                        color: effectiveTab === "pending" ? "#fff" : "rgba(0,0,0,0.35)",
-                      }}
-                    >
-                      Pending
-                      {pendingPayments.length > 0 && (
-                        <span className="ml-2 opacity-60">{pendingPayments.length}</span>
-                      )}
-                    </button>
-                    <div className="w-px h-4 bg-black/[0.08]" />
-                    <button
-                      onClick={() => setActiveTab("reviewed")}
-                      className="px-5 py-2.5 text-[11px] font-medium tracking-[0.1em] uppercase transition-all duration-200"
-                      style={{
-                        backgroundColor: effectiveTab === "reviewed" ? "#111" : "transparent",
-                        color: effectiveTab === "reviewed" ? "#fff" : "rgba(0,0,0,0.35)",
-                      }}
-                    >
-                      Reviewed
-                      {reviewedPayments.length > 0 && (
-                        <span className="ml-2 opacity-60">{reviewedPayments.length}</span>
-                      )}
-                    </button>
-                  </div>
-
-                  {effectiveTab === "pending" && pendingPayments.length > 0 && (
-                    <button
-                      onClick={acceptAll}
-                      className="text-[11px] font-medium tracking-[0.1em] uppercase px-4 py-2 transition-all duration-300 hover:opacity-80"
-                      style={{ color: clr.accept.text, border: `1px solid ${clr.accept.border}`, backgroundColor: clr.accept.bg }}
-                    >
-                      Accept all
-                    </button>
-                  )}
-                </div>
+        {/* Tabs */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-0 border border-black/[0.08]" style={{ borderRadius: "2px" }}>
+            <button
+              onClick={() => setActiveTab("pending")}
+              className="px-5 py-2.5 text-[11px] font-medium tracking-[0.1em] uppercase transition-all duration-200"
+              style={{
+                backgroundColor: activeTab === "pending" ? "#111" : "transparent",
+                color: activeTab === "pending" ? "#fff" : "rgba(0,0,0,0.35)",
+              }}
+            >
+              Pending
+              {pendingPayments.length > 0 && (
+                <span className="ml-2 opacity-60">{pendingPayments.length}</span>
               )}
-
-              {alreadyReviewed && (
-                <div className="border border-black/[0.06] px-6 py-4 mb-8 flex items-center gap-3">
-                  <div className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0" style={{ backgroundColor: clr.accept.dot }}>
-                    <Check className="w-3 h-3 text-white" strokeWidth={2.5} />
-                  </div>
-                  <p className="text-[13px] text-black/50 tracking-wide">
-                    This batch has been reviewed. Decisions are shown below.
-                  </p>
-                </div>
+            </button>
+            <div className="w-px h-4 bg-black/[0.08]" />
+            <button
+              onClick={() => setActiveTab("completed")}
+              className="px-5 py-2.5 text-[11px] font-medium tracking-[0.1em] uppercase transition-all duration-200"
+              style={{
+                backgroundColor: activeTab === "completed" ? "#111" : "transparent",
+                color: activeTab === "completed" ? "#fff" : "rgba(0,0,0,0.35)",
+              }}
+            >
+              Completed
+              {completedPayments.length > 0 && (
+                <span className="ml-2 opacity-60">{completedPayments.length}</span>
               )}
+            </button>
+          </div>
 
-              {/* Empty state for current tab */}
-              {effectiveTab === "pending" && pendingPayments.length === 0 && !alreadyReviewed && (
-                <div className="border border-black/[0.06] py-12 text-center mb-6">
-                  <Check className="w-5 h-5 text-black/15 mx-auto mb-3" strokeWidth={1.5} />
-                  <p className="text-[13px] text-black/30 tracking-wide">
-                    All payments have been reviewed
-                  </p>
-                  <button
-                    onClick={() => setActiveTab("reviewed")}
-                    className="text-[11px] font-medium tracking-[0.1em] uppercase text-black/40 hover:text-black mt-3 transition-colors"
-                  >
-                    View reviewed payments
-                  </button>
-                </div>
-              )}
+          {activeTab === "pending" && pendingPayments.length > 0 && (
+            <button
+              onClick={acceptAllPending}
+              className="text-[11px] font-medium tracking-[0.1em] uppercase px-4 py-2 transition-all duration-300 hover:opacity-80"
+              style={{ color: clr.accept.text, border: `1px solid ${clr.accept.border}`, backgroundColor: clr.accept.bg }}
+            >
+              Accept all
+            </button>
+          )}
+        </div>
 
-              {effectiveTab === "reviewed" && reviewedPayments.length === 0 && !alreadyReviewed && (
-                <div className="border border-black/[0.06] py-12 text-center mb-6">
-                  <Clock className="w-5 h-5 text-black/15 mx-auto mb-3" strokeWidth={1.5} />
-                  <p className="text-[13px] text-black/30 tracking-wide">
-                    No decisions made yet
-                  </p>
-                </div>
-              )}
-            </>
-          );
-        })()}
+        {/* Error banner */}
+        {error && (
+          <div className="border px-4 py-3 mb-6 text-[12px] tracking-wide flex items-center gap-2"
+            style={{ borderColor: clr.reject.border, backgroundColor: clr.reject.bg, color: clr.reject.text }}>
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" strokeWidth={1.5} />
+            {error}
+          </div>
+        )}
+
+        {/* Empty states */}
+        {activeTab === "pending" && pendingPayments.length === 0 && (
+          <div className="border border-black/[0.06] py-12 text-center mb-6">
+            <Check className="w-5 h-5 text-black/35 mx-auto mb-3" strokeWidth={1.5} />
+            <p className="text-[13px] text-black/30 tracking-wide">All payments submitted</p>
+            <button
+              onClick={() => setActiveTab("completed")}
+              className="text-[11px] font-medium tracking-[0.1em] uppercase text-black/40 hover:text-black mt-3 transition-colors"
+            >
+              View completed
+            </button>
+          </div>
+        )}
+
+        {activeTab === "completed" && completedPayments.length === 0 && (
+          <div className="border border-black/[0.06] py-12 text-center mb-6">
+            <Clock className="w-5 h-5 text-black/35 mx-auto mb-3" strokeWidth={1.5} />
+            <p className="text-[13px] text-black/30 tracking-wide">No decisions submitted yet</p>
+          </div>
+        )}
 
         {/* Payment cards */}
         <div className="space-y-0 border-t border-black/[0.06]">
           {payments
-            .filter((p) => {
-              if (alreadyReviewed) return true;
-              const d = decisions[p.id]?.decision || "pending";
-              const pendingPayments = payments.filter((pp) => (decisions[pp.id]?.decision || "pending") === "pending");
-              const effectiveTab = pendingPayments.length === 0 && activeTab === "pending" ? "reviewed" : activeTab;
-              if (effectiveTab === "pending") return d === "pending";
-              return d === "accepted" || d === "rejected";
-            })
+            .filter((p) => activeTab === "pending" ? !isSubmitted(p.id) : isSubmitted(p.id))
             .map((p, i) => {
-            const dec = decisions[p.id] || { decision: "pending", reason: "" };
-            const isExpanded = expandedRow === p.id;
+              const dec = decisions[p.id] || { decision: "pending" as Decision, reason: "" };
+              const isExpanded = expandedRow === p.id;
+              const submitted = isSubmitted(p.id);
+              const ready = isReadyToCheck(p.id);
+              const isChecked = checked.has(p.id);
 
-            return (
-              <div
-                key={p.id}
-                className="border-b transition-all duration-300"
-                style={{
-                  animationDelay: `${i * 40}ms`,
-                  borderColor:
-                    dec.decision === "accepted"
-                      ? clr.accept.border
-                      : dec.decision === "rejected"
-                      ? clr.reject.border
-                      : "rgba(0,0,0,0.06)",
-                  backgroundColor:
-                    dec.decision === "accepted"
-                      ? clr.accept.bg
-                      : dec.decision === "rejected"
-                      ? clr.reject.bg
-                      : "transparent",
-                }}
-              >
-                <div className="py-5 px-1">
-                  <div className="flex-1 min-w-0">
-                    {/* Top row: name, amount, action buttons */}
-                    <div className="flex items-start justify-between gap-6">
-                      <div className="min-w-0 flex-1">
-                        <h3
-                          style={{ fontFamily: font.display }}
-                          className="text-[20px] font-normal text-black tracking-[-0.01em]"
-                        >
-                          {p.name}
-                        </h3>
-                        <p className="text-[12px] text-black/35 mt-1 leading-relaxed max-w-lg truncate">
-                          {p.details}
-                        </p>
-                      </div>
+              return (
+                <div
+                  key={p.id}
+                  className="border-b transition-all duration-300"
+                  style={{
+                    animationDelay: `${i * 40}ms`,
+                    borderColor:
+                      dec.decision === "accepted"
+                        ? clr.accept.border
+                        : dec.decision === "rejected"
+                        ? clr.reject.border
+                        : "rgba(0,0,0,0.06)",
+                    backgroundColor:
+                      dec.decision === "accepted"
+                        ? clr.accept.bg
+                        : dec.decision === "rejected"
+                        ? clr.reject.bg
+                        : "transparent",
+                  }}
+                >
+                  <div className="py-5 px-1">
+                    <div className="flex-1 min-w-0">
+                      {/* Top row: checkbox (pending only), name, amount, decision buttons */}
+                      <div className="flex items-start justify-between gap-4">
 
-                      <div className="flex items-center gap-5 flex-shrink-0">
-                        {/* Amount */}
-                        <div className="text-right">
-                          <div
+                        {/* Checkbox — only on pending tab */}
+                        {!submitted && (
+                          <div className="flex-shrink-0 mt-1.5">
+                            <button
+                              onClick={() => toggleChecked(p.id)}
+                              disabled={!ready}
+                              className={`w-5 h-5 border flex items-center justify-center transition-all duration-200 ${
+                                ready ? "cursor-pointer hover:border-black/40" : "cursor-default opacity-20"
+                              }`}
+                              style={{
+                                borderColor: isChecked ? "#111" : "rgba(0,0,0,0.15)",
+                                backgroundColor: isChecked ? "#111" : "transparent",
+                                borderRadius: "3px",
+                              }}
+                            >
+                              {isChecked && <Check className="w-3 h-3 text-white" strokeWidth={2.5} />}
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="min-w-0 flex-1">
+                          <h3
                             style={{ fontFamily: font.display }}
-                            className="text-[24px] font-light text-black tracking-tight"
+                            className="text-[20px] font-normal text-black tracking-[-0.01em]"
                           >
-                            {p.amount}
-                          </div>
-                          <div className="text-[9px] font-medium tracking-[0.15em] uppercase text-black/25 mt-0.5">
-                            USDC
-                          </div>
+                            {p.name}
+                          </h3>
+                          <p className="text-[12px] text-black/35 mt-1 leading-relaxed max-w-lg truncate">
+                            {p.details}
+                          </p>
                         </div>
 
-                        {/* Decision buttons — horizontal pair */}
-                        <div className="flex items-center gap-0 border border-black/[0.08] overflow-hidden" style={{ borderRadius: "2px" }}>
-                          <button
-                            onClick={() => setDecisionFn(p.id, "accepted")}
-                            disabled={alreadyReviewed}
-                            className={`w-10 h-10 flex items-center justify-center transition-all duration-200 ${alreadyReviewed ? "cursor-default" : "hover:bg-black/[0.03]"}`}
-                            style={{
-                              backgroundColor: dec.decision === "accepted" ? clr.accept.dot : "transparent",
-                              color: dec.decision === "accepted" ? "#fff" : "rgba(0,0,0,0.25)",
-                            }}
-                            title="Approve"
-                          >
-                            <Check className="w-4 h-4" strokeWidth={2} />
-                          </button>
-                          <div className="w-px h-5 bg-black/[0.08]" />
-                          <button
-                            onClick={() => setDecisionFn(p.id, "rejected")}
-                            disabled={alreadyReviewed}
-                            className={`w-10 h-10 flex items-center justify-center transition-all duration-200 ${alreadyReviewed ? "cursor-default" : "hover:bg-black/[0.03]"}`}
-                            style={{
-                              backgroundColor: dec.decision === "rejected" ? clr.reject.dot : "transparent",
-                              color: dec.decision === "rejected" ? "#fff" : "rgba(0,0,0,0.25)",
-                            }}
-                            title="Reject"
-                          >
-                            <X className="w-4 h-4" strokeWidth={2} />
-                          </button>
+                        <div className="flex items-center gap-5 flex-shrink-0">
+                          {/* Amount */}
+                          <div className="text-right">
+                            <div
+                              style={{ fontFamily: font.display }}
+                              className="text-[24px] font-light text-black tracking-tight"
+                            >
+                              {p.amount}
+                            </div>
+                            <div className="text-[9px] font-medium tracking-[0.15em] uppercase text-black/25 mt-0.5">
+                              USDC
+                            </div>
+                          </div>
+
+                          {/* Decision buttons — hidden on completed tab */}
+                          {!submitted && (
+                            <div className="flex items-center gap-0 border border-black/[0.08] overflow-hidden" style={{ borderRadius: "2px" }}>
+                              <button
+                                onClick={() => setDecisionFn(p.id, "accepted")}
+                                className="w-10 h-10 flex items-center justify-center transition-all duration-200 hover:bg-black/[0.03]"
+                                style={{
+                                  backgroundColor: dec.decision === "accepted" ? clr.accept.dot : "transparent",
+                                  color: dec.decision === "accepted" ? "#fff" : "rgba(0,0,0,0.25)",
+                                }}
+                                title="Approve"
+                              >
+                                <Check className="w-4 h-4" strokeWidth={2} />
+                              </button>
+                              <div className="w-px h-5 bg-black/[0.08]" />
+                              <button
+                                onClick={() => setDecisionFn(p.id, "rejected")}
+                                className="w-10 h-10 flex items-center justify-center transition-all duration-200 hover:bg-black/[0.03]"
+                                style={{
+                                  backgroundColor: dec.decision === "rejected" ? clr.reject.dot : "transparent",
+                                  color: dec.decision === "rejected" ? "#fff" : "rgba(0,0,0,0.25)",
+                                }}
+                                title="Reject"
+                              >
+                                <X className="w-4 h-4" strokeWidth={2} />
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Status badge on completed tab */}
+                          {submitted && (
+                            <span
+                              className="text-[10px] font-medium tracking-[0.12em] uppercase px-3 py-1.5"
+                              style={{
+                                color: dec.decision === "accepted" ? clr.accept.text : clr.reject.text,
+                                backgroundColor: dec.decision === "accepted" ? clr.accept.bg : clr.reject.bg,
+                                border: `1px solid ${dec.decision === "accepted" ? clr.accept.border : clr.reject.border}`,
+                              }}
+                            >
+                              {dec.decision === "accepted" ? "Accepted" : "Rejected"}
+                            </span>
+                          )}
                         </div>
                       </div>
-                    </div>
 
                       <div className="flex items-center gap-4 mt-3">
                         <span className="flex items-center gap-1.5 text-[11px] text-black/30 tracking-wide">
@@ -962,15 +931,9 @@ function BatchReview({
                           className="flex items-center gap-1 text-[11px] text-black/30 hover:text-black/60 ml-auto transition-colors tracking-wide"
                         >
                           {isExpanded ? (
-                            <>
-                              <ChevronUp className="w-3 h-3" strokeWidth={1.5} />
-                              Less
-                            </>
+                            <><ChevronUp className="w-3 h-3" strokeWidth={1.5} />Less</>
                           ) : (
-                            <>
-                              <ChevronDown className="w-3 h-3" strokeWidth={1.5} />
-                              Details
-                            </>
+                            <><ChevronDown className="w-3 h-3" strokeWidth={1.5} />Details</>
                           )}
                         </button>
                       </div>
@@ -995,84 +958,75 @@ function BatchReview({
                         </div>
                       )}
 
-                      {/* Rejection reason */}
+                      {/* Rejection reason — editable on pending, read-only on completed */}
                       {dec.decision === "rejected" && (
                         <div className="mt-5 pt-5 border-t border-black/[0.06]">
-                          <p className="text-[9px] font-medium tracking-[0.15em] uppercase mb-3" style={{ color: clr.reject.text, opacity: 0.7 }}>
+                          <p className="text-[9px] font-medium tracking-[0.15em] uppercase mb-3" style={{ color: clr.reject.text }}>
                             Rejection Reason
-                            {!alreadyReviewed && (
-                              <span style={{ opacity: 0.5 }} className="ml-1">(required)</span>
+                            {!submitted && (
+                              <span className="ml-1" style={{ color: clr.reject.text, opacity: 0.6 }}>(required to submit)</span>
                             )}
                           </p>
-                          {alreadyReviewed ? (
-                            <p className="text-[13px] text-black/50">{dec.reason || "—"}</p>
+                          {submitted ? (
+                            <p className="text-[13px] text-black/70">{dec.reason || "—"}</p>
                           ) : (
                             <>
-                              <div className="flex gap-2 flex-wrap">
-                                {[
+                              <select
+                                value={[
                                   "Wallet address discrepancy",
                                   "Amount exceeds grant limit",
                                   "Insufficient proof of work",
                                   "Duplicate submission",
                                   "KYC verification pending",
-                                ].map((preset) => (
-                                  <button
-                                    key={preset}
-                                    onClick={() => setReason(p.id, preset)}
-                                    className="text-[11px] tracking-wide px-3 py-2 border transition-all duration-200"
-                                    style={{
-                                      backgroundColor: dec.reason === preset ? clr.reject.dot : "white",
-                                      color: dec.reason === preset ? "#fff" : "rgba(0,0,0,0.4)",
-                                      borderColor: dec.reason === preset ? clr.reject.dot : "rgba(0,0,0,0.1)",
-                                    }}
-                                  >
-                                    {preset}
-                                  </button>
-                                ))}
-                              </div>
+                                  "Outside grant scope",
+                                ].includes(dec.reason) ? dec.reason : dec.reason ? "Other" : ""}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val !== "Other" && val !== "") setReason(p.id, val);
+                                  else if (val === "Other") setReason(p.id, "");
+                                  else setReason(p.id, "");
+                                }}
+                                style={{ borderColor: clr.reject.border, fontFamily: font.body }}
+                                className="w-full text-[13px] border px-4 py-3 focus:outline-none bg-white text-black/70 tracking-wide"
+                              >
+                                <option value="">Select a reason…</option>
+                                <option>Wallet address discrepancy</option>
+                                <option>Amount exceeds grant limit</option>
+                                <option>Insufficient proof of work</option>
+                                <option>Duplicate submission</option>
+                                <option>KYC verification pending</option>
+                                <option>Outside grant scope</option>
+                                <option value="Other">Other (custom)</option>
+                              </select>
                               <textarea
                                 value={dec.reason}
                                 onChange={(e) => setReason(p.id, e.target.value)}
-                                placeholder="Or type a custom reason..."
+                                placeholder="Add details or custom reason…"
                                 rows={2}
                                 style={{ borderColor: clr.reject.border }}
-                                className="mt-3 w-full text-[13px] border px-4 py-3 focus:outline-none resize-none text-black/70 placeholder:text-black/15 tracking-wide transition-colors"
+                                className="mt-2 w-full text-[13px] border px-4 py-3 focus:outline-none resize-none text-black/70 placeholder:text-black/30 tracking-wide transition-colors"
                               />
                             </>
                           )}
                         </div>
                       )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
         </div>
 
-        {/* Submit bar */}
-        {!alreadyReviewed && (
+        {/* Submit bar — appears when at least one payment is checked */}
+        {checkedCount > 0 && (
           <div className="sticky bottom-0 mt-0 -mx-8 px-8 pb-6 pt-4 bg-gradient-to-t from-white via-white to-white/0">
             <div className="border border-black/[0.08] bg-white p-5 flex items-center justify-between">
-              <div className="text-[12px] tracking-wide">
-                {pendingCount > 0 ? (
-                  <span className="text-black/40">
-                    {pendingCount} payment{pendingCount !== 1 ? "s" : ""} still need a decision
-                  </span>
-                ) : (
-                  <span className="text-black/60">All payments reviewed</span>
-                )}
-                {rejectedCount > 0 &&
-                  Object.entries(decisions).some(
-                    ([, d]) => d.decision === "rejected" && !d.reason.trim()
-                  ) && (
-                    <span className="text-black/30 ml-3">
-                      — Some rejections need a reason
-                    </span>
-                  )}
+              <div className="text-[12px] tracking-wide text-black/50">
+                <span className="text-black font-medium">{checkedCount}</span> payment{checkedCount !== 1 ? "s" : ""} selected for submission
               </div>
               <button
-                onClick={submitDecisions}
-                disabled={!canSubmit || submitting}
+                onClick={submitChecked}
+                disabled={submitting}
                 className="flex items-center gap-3 bg-black hover:bg-black/85 disabled:bg-black/15 disabled:text-black/30 text-white text-[12px] font-medium tracking-[0.08em] px-8 py-3.5 transition-all duration-300"
               >
                 {submitting ? (
@@ -1082,10 +1036,8 @@ function BatchReview({
                   </>
                 ) : (
                   <>
-                    Submit Decisions
-                    <span className="text-white/40">
-                      {acceptedCount}+{rejectedCount}
-                    </span>
+                    Submit {checkedCount} Decision{checkedCount !== 1 ? "s" : ""}
+                    <ArrowRight className="w-3.5 h-3.5" strokeWidth={2} />
                   </>
                 )}
               </button>

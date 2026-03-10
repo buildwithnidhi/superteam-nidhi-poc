@@ -47,6 +47,7 @@ interface LumaEvent {
     country?: string;
     full_address?: string;
   } | null;
+  guestCounts: { registered: number; approved: number } | null;
 }
 
 interface LocationOption {
@@ -66,10 +67,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [startDate, setStartDate] = useState("");
+  const [startDate, setStartDate] = useState("2026-01-01");
   const [endDate, setEndDate] = useState("");
   const [selectedCity, setSelectedCity] = useState("");
   const [selectedCountry, setSelectedCountry] = useState("");
+  const [sortBy, setSortBy] = useState("upcoming");
 
   const buildParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -111,6 +113,26 @@ export default function Dashboard() {
       setRefreshing(false);
     }
   };
+
+  const now = new Date();
+  const sortedEvents = [...events].sort((a, b) => {
+    const aDate = new Date(a.start_at).getTime();
+    const bDate = new Date(b.start_at).getTime();
+    if (sortBy === "upcoming") {
+      const aUpcoming = aDate >= now.getTime();
+      const bUpcoming = bDate >= now.getTime();
+      if (aUpcoming !== bUpcoming) return aUpcoming ? -1 : 1;
+      return aUpcoming ? aDate - bDate : bDate - aDate;
+    }
+    if (sortBy === "past") {
+      const aPast = aDate < now.getTime();
+      const bPast = bDate < now.getTime();
+      if (aPast !== bPast) return aPast ? -1 : 1;
+      return bDate - aDate;
+    }
+    if (sortBy === "asc") return aDate - bDate;
+    return bDate - aDate; // desc
+  });
 
   const uniqueCountries = Array.from(
     new Set(locations.map((l) => l.country))
@@ -258,6 +280,20 @@ export default function Dashboard() {
               ))}
             </select>
 
+            <div className="w-[1px] h-4 bg-black/[0.08]" />
+            <span className="text-[10px] font-medium tracking-[0.15em] uppercase text-black/30">Sort</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              style={{ fontFamily: font.mono }}
+              className="text-[11px] border border-black/[0.08] px-3 py-1.5 text-black/60 bg-white focus:outline-none focus:border-black/20 transition-colors"
+            >
+              <option value="upcoming">Upcoming first</option>
+              <option value="past">Past first</option>
+              <option value="asc">Date ↑</option>
+              <option value="desc">Date ↓</option>
+            </select>
+
             {(startDate || endDate || selectedCity || selectedCountry) && (
               <button
                 onClick={() => {
@@ -273,7 +309,7 @@ export default function Dashboard() {
             )}
 
             <span className="text-[11px] text-black/40 tracking-wide ml-auto">
-              {events.length} event{events.length !== 1 ? "s" : ""}
+              {sortedEvents.length} event{sortedEvents.length !== 1 ? "s" : ""}
             </span>
           </div>
 
@@ -293,7 +329,7 @@ export default function Dashboard() {
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="border-b border-black/[0.06]">
-                  {["Event", "Date", "Location"].map((h) => (
+                  {["Event", "Date", "Location", "Registered", "Approved"].map((h) => (
                     <th
                       key={h}
                       className="px-6 py-3 text-left text-[9px] font-medium tracking-[0.15em] uppercase text-black/30"
@@ -304,7 +340,7 @@ export default function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {events.map((event) => (
+                {sortedEvents.map((event) => (
                   <tr
                     key={event.api_id}
                     onClick={() => router.push(`/events/${event.api_id}`)}
@@ -336,6 +372,14 @@ export default function Dashboard() {
                           <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
                         </svg>
                       </div>
+                    </td>
+                    <td className="px-6 py-4 text-black/40 text-center">
+                      {event.guestCounts ? event.guestCounts.registered : <span className="text-black/15">—</span>}
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      {event.guestCounts ? (
+                        <span className="text-emerald-600 font-medium">{event.guestCounts.approved}</span>
+                      ) : <span className="text-black/15">—</span>}
                     </td>
                   </tr>
                 ))}

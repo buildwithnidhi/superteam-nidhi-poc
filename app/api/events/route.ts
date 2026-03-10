@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEvents } from "@/lib/luma";
+import { getPool } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,8 +47,26 @@ export async function GET(request: NextRequest) {
       }
     });
 
+    // Fetch guest counts from DB for all filtered events
+    const pool = getPool();
+    const eventIds = events.map((e) => e.api_id);
+    let guestCounts: Record<string, { registered: number; approved: number }> = {};
+    if (eventIds.length > 0) {
+      const placeholders = eventIds.map(() => "?").join(",");
+      const [rows] = await pool.execute(
+        `SELECT event_api_id,
+          COUNT(*) as registered,
+          SUM(approval_status = 'approved') as approved
+         FROM luma_guests WHERE event_api_id IN (${placeholders}) GROUP BY event_api_id`,
+        eventIds
+      ) as [Array<{ event_api_id: string; registered: number; approved: number }>, unknown];
+      rows.forEach((r) => {
+        guestCounts[r.event_api_id] = { registered: r.registered, approved: Number(r.approved) };
+      });
+    }
+
     return NextResponse.json({
-      events,
+      events: events.map((e) => ({ ...e, guestCounts: guestCounts[e.api_id] || null })),
       locations: Array.from(locations.values()),
       lastRefreshed: data.lastRefreshed,
     });

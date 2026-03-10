@@ -179,7 +179,8 @@ async function upsertEvents(events: LumaEvent[]): Promise<void> {
 async function getEventsFromDb(): Promise<LumaEvent[]> {
   const pool = getPool();
   const [rows] = await pool.execute(
-    `SELECT event_api_id, title, start_at, end_at, geo_address_json, cover_url, url, creator_api_id, timezone FROM luma_events ORDER BY start_at DESC`
+    `SELECT event_api_id, title, start_at, end_at, geo_address_json, cover_url, url, creator_api_id, timezone FROM luma_events
+     ORDER BY CASE WHEN start_at >= NOW() THEN 0 ELSE 1 END, ABS(TIMESTAMPDIFF(SECOND, start_at, NOW()))`
   ) as [Array<Record<string, unknown>>, unknown];
 
   return rows.map((r) => ({
@@ -190,7 +191,7 @@ async function getEventsFromDb(): Promise<LumaEvent[]> {
     url: r.url as string | null,
     cover_url: r.cover_url as string | null,
     geo_address_json: r.geo_address_json
-      ? JSON.parse(r.geo_address_json as string)
+      ? (typeof r.geo_address_json === "string" ? JSON.parse(r.geo_address_json) : r.geo_address_json)
       : null,
     geo_latitude: null,
     geo_longitude: null,
