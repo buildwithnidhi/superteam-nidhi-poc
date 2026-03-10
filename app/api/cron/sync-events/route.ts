@@ -33,7 +33,7 @@ export async function GET(request: Request) {
   const lastSync = rows.length ? rows[0].synced_at : new Date("2026-01-01");
 
   // Fetch only recent events (sorted by start_at desc, stop when older than lastSync)
-  const newEvents = [];
+  const newEvents: Record<string, unknown>[] = [];
   let cursor: string | null = null;
   let done = false;
 
@@ -62,28 +62,23 @@ export async function GET(request: Request) {
   } while (cursor && !done);
 
   // Upsert new events into DB
+  const upsertSql = "INSERT INTO luma_events (event_api_id, title, start_at, end_at, geo_city, geo_country, cover_url, url, geo_address_json, creator_api_id, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE title=VALUES(title), start_at=VALUES(start_at), end_at=VALUES(end_at), geo_city=VALUES(geo_city), geo_country=VALUES(geo_country), cover_url=VALUES(cover_url), url=VALUES(url), geo_address_json=VALUES(geo_address_json), updated_at=CURRENT_TIMESTAMP";
   for (const ev of newEvents) {
-    await pool.execute(
-      `INSERT INTO luma_events (event_api_id, title, start_at, end_at, geo_city, geo_country, cover_url, url, geo_address_json, creator_api_id, timezone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE title=VALUES(title), start_at=VALUES(start_at), end_at=VALUES(end_at),
-         geo_city=VALUES(geo_city), geo_country=VALUES(geo_country), cover_url=VALUES(cover_url),
-         url=VALUES(url), geo_address_json=VALUES(geo_address_json), updated_at=CURRENT_TIMESTAMP`,
-      [
-        ev.api_id, ev.name,
-        ev.start_at ? new Date(ev.start_at as string) : null,
-        ev.end_at ? new Date(ev.end_at as string) : null,
-        (ev.geo_address_json as Record<string, string> | null)?.city || null,
-        (ev.geo_address_json as Record<string, string> | null)?.country || null,
-        ev.cover_url || null, ev.url || null,
-        ev.geo_address_json ? JSON.stringify(ev.geo_address_json) : null,
-        ev.user_api_id || null, ev.timezone || null,
-      ]
-    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (pool as any).execute(upsertSql, [
+      ev.api_id, ev.name,
+      ev.start_at ? new Date(ev.start_at as string) : null,
+      ev.end_at ? new Date(ev.end_at as string) : null,
+      (ev.geo_address_json as Record<string, string> | null)?.city || null,
+      (ev.geo_address_json as Record<string, string> | null)?.country || null,
+      ev.cover_url || null, ev.url || null,
+      ev.geo_address_json ? JSON.stringify(ev.geo_address_json) : null,
+      ev.user_api_id || null, ev.timezone || null,
+    ]);
   }
 
   await pool.execute(
-    `INSERT INTO luma_sync_log (sync_type, events_count, people_count, status) VALUES ('events', ?, 0, 'success')`,
+    "INSERT INTO luma_sync_log (sync_type, events_count, people_count, status) VALUES ('events', ?, 0, 'success')",
     [newEvents.length]
   );
 
