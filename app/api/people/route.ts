@@ -91,7 +91,6 @@ export async function GET(request: NextRequest) {
 
       for (const g of guests) {
         const isHost =
-          g.role?.toLowerCase() === "host" ||
           hostEmailsFromTags.has(g.user_email.toLowerCase());
         if (isHost) {
           hostEmails.add(g.user_email.toLowerCase());
