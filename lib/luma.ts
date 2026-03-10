@@ -11,6 +11,25 @@ function headers() {
   return { "x-luma-api-key": API_KEY };
 }
 
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retries = 5
+): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    const res = await fetch(url, options);
+    if (res.status === 429) {
+      // Wait 5s, 10s, 20s, 40s, 80s — Luma rate limits need longer backoff
+      const wait = 5000 * Math.pow(2, i);
+      console.log(`Rate limited, waiting ${wait / 1000}s before retry ${i + 1}/${retries}...`);
+      await new Promise((r) => setTimeout(r, wait));
+      continue;
+    }
+    return res;
+  }
+  return fetch(url, options);
+}
+
 async function fetchAllPages<T>(
   url: string,
   extractEntries: (data: Record<string, unknown>) => T[]
@@ -23,7 +42,7 @@ async function fetchAllPages<T>(
     params.set("pagination_limit", "100");
     if (cursor) params.set("pagination_cursor", cursor);
     const sep = url.includes("?") ? "&" : "?";
-    const res = await fetch(`${url}${sep}${params}`, { headers: headers() });
+    const res = await fetchWithRetry(`${url}${sep}${params}`, { headers: headers() });
     if (!res.ok) throw new Error(`Luma API error: ${res.status}`);
     const data = await res.json();
     all.push(...extractEntries(data));
@@ -115,6 +134,29 @@ function writeCache(data: CachedData) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(data));
 }
 
+export async function getEvents(forceRefresh = false): Promise<{
+  events: LumaEvent[];
+  lastRefreshed: string;
+}> {
+  if (!forceRefresh) {
+    const cached = readCache();
+    if (cached) return { events: cached.events, lastRefreshed: cached.lastRefreshed };
+  }
+
+  const events = await fetchEvents();
+
+  // Update cache with new events, preserve existing people/guests data
+  const existing = readCache();
+  const data: CachedData = {
+    events,
+    people: existing?.people || [],
+    eventGuests: existing?.eventGuests || {},
+    lastRefreshed: new Date().toISOString(),
+  };
+  writeCache(data);
+  return { events: data.events, lastRefreshed: data.lastRefreshed };
+}
+
 export async function getData(forceRefresh = false): Promise<CachedData> {
   if (!forceRefresh) {
     const cached = readCache();
@@ -123,25 +165,53 @@ export async function getData(forceRefresh = false): Promise<CachedData> {
 
   const [events, people] = await Promise.all([fetchEvents(), fetchPeople()]);
 
-  // Fetch guests for all events (in batches to avoid rate limiting)
-  const eventGuests: Record<string, LumaGuest[]> = {};
-  const batchSize = 10;
-  for (let i = 0; i < events.length; i += batchSize) {
-    const batch = events.slice(i, i + batchSize);
-    const results = await Promise.all(
-      batch.map((e) => fetchEventGuests(e.api_id))
-    );
-    batch.forEach((e, idx) => {
-      eventGuests[e.api_id] = results[idx];
-    });
-  }
-
+  const existing = readCache();
   const data: CachedData = {
     events,
     people,
-    eventGuests,
+    eventGuests: existing?.eventGuests || {},
     lastRefreshed: new Date().toISOString(),
   };
   writeCache(data);
   return data;
+}
+
+export async function getGuestsForEvents(
+  eventIds: string[]
+): Promise<Record<string, LumaGuest[]>> {
+  // Try to use cached guest data first
+  const cached = readCache();
+  const result: Record<string, LumaGuest[]> = {};
+  const toFetch: string[] = [];
+
+  for (const id of eventIds) {
+    if (cached?.eventGuests[id]) {
+      result[id] = cached.eventGuests[id];
+    } else {
+      toFetch.push(id);
+    }
+  }
+
+  // Fetch missing guests in small batches with delays
+  const batchSize = 5;
+  for (let i = 0; i < toFetch.length; i += batchSize) {
+    const batch = toFetch.slice(i, i + batchSize);
+    const results = await Promise.all(
+      batch.map((id) => fetchEventGuests(id))
+    );
+    batch.forEach((id, idx) => {
+      result[id] = results[idx];
+    });
+    if (i + batchSize < toFetch.length) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  // Update cache with new guest data
+  if (cached && toFetch.length > 0) {
+    cached.eventGuests = { ...cached.eventGuests, ...result };
+    writeCache(cached);
+  }
+
+  return result;
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getData } from "@/lib/luma";
+import { getEvents } from "@/lib/luma";
 
 export async function GET(request: NextRequest) {
   try {
@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
     const city = searchParams.get("city");
     const country = searchParams.get("country");
 
-    const data = await getData();
+    const data = await getEvents();
     let events = data.events;
 
     if (startDate) {

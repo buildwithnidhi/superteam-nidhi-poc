@@ -188,23 +188,15 @@ export default function Dashboard() {
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                Start Date
+                Date <span className="text-zinc-400">(1 day max)</span>
               </label>
               <input
                 type="date"
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                End Date
-              </label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setEndDate(e.target.value);
+                }}
                 className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
               />
             </div>
@@ -245,7 +237,7 @@ export default function Dashboard() {
                 ))}
               </select>
             </div>
-            {(startDate || endDate || selectedCity || selectedCountry) && (
+            {(startDate || selectedCity || selectedCountry) && (
               <button
                 onClick={() => {
                   setStartDate("");

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getData } from "@/lib/luma";
+import { getData, getGuestsForEvents } from "@/lib/luma";
 import { LumaGuest } from "@/lib/types";
 
 interface PersonRow {
@@ -48,6 +48,9 @@ export async function GET(request: NextRequest) {
       events = events.filter((e) => ids.has(e.api_id));
     }
 
+    // Fetch guests only for the filtered events
+    const eventGuestMap = await getGuestsForEvents(events.map((e) => e.api_id));
+
     const rows: PersonRow[] = [];
     const seen = new Set<string>();
 
@@ -61,7 +64,7 @@ export async function GET(request: NextRequest) {
     );
 
     for (const event of events) {
-      const guests: LumaGuest[] = data.eventGuests[event.api_id] || [];
+      const guests: LumaGuest[] = eventGuestMap[event.api_id] || [];
       const location = event.geo_address_json
         ? [event.geo_address_json.city, event.geo_address_json.country]
             .filter(Boolean)
