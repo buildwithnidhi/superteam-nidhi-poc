@@ -6,9 +6,20 @@ interface PersonRow {
   name: string;
   email: string;
   role: "host" | "guest";
+  approvalStatus: string | null;
   eventName: string;
   eventId: string;
   location: string;
+}
+
+interface EventPeopleGroup {
+  eventId: string;
+  eventName: string;
+  eventDate: string;
+  location: string;
+  eventUrl: string | null;
+  hosts: PersonRow[];
+  guests: PersonRow[];
 }
 
 export async function GET(request: NextRequest) {
@@ -20,8 +31,9 @@ export async function GET(request: NextRequest) {
     const city = searchParams.get("city");
     const country = searchParams.get("country");
 
-    const data = await getData();
-    let events = data.events;
+    // getData uses cache — fetches people too if not cached yet (needed for host identification)
+    const cacheData = await getData();
+    let events = cacheData.events;
 
     if (startDate) {
       const start = new Date(startDate);
@@ -48,20 +60,23 @@ export async function GET(request: NextRequest) {
       events = events.filter((e) => ids.has(e.api_id));
     }
 
-    // Fetch guests only for the filtered events
-    const eventGuestMap = await getGuestsForEvents(events.map((e) => e.api_id));
+    // Cap at 50 events to avoid rate limiting
+    if (events.length > 50) {
+      events = events.slice(0, 50);
+    }
 
-    const rows: PersonRow[] = [];
-    const seen = new Set<string>();
+    const eventIdList = events.map((e) => e.api_id);
+    const eventGuestMap = await getGuestsForEvents(eventIdList);
 
-    // Find hosts from calendar people with "Host" tag
-    const hostEmails = new Set(
-      data.people
+    const hostEmailsFromTags = new Set(
+      cacheData.people
         .filter((p) =>
           p.tags.some((t) => t.name.toLowerCase().includes("host"))
         )
         .map((p) => p.email.toLowerCase())
     );
+
+    const groups: EventPeopleGroup[] = [];
 
     for (const event of events) {
       const guests: LumaGuest[] = eventGuestMap[event.api_id] || [];
@@ -71,24 +86,53 @@ export async function GET(request: NextRequest) {
             .join(", ")
         : "Online";
 
-      for (const guest of guests) {
-        const key = `${guest.user_email}-${event.api_id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+      const hostEmails = new Set<string>();
+      const hostRows: PersonRow[] = [];
 
-        const isHost = hostEmails.has(guest.user_email.toLowerCase());
-        rows.push({
-          name: guest.user_name,
-          email: guest.user_email,
-          role: isHost ? "host" : "guest",
+      for (const g of guests) {
+        const isHost =
+          g.role?.toLowerCase() === "host" ||
+          hostEmailsFromTags.has(g.user_email.toLowerCase());
+        if (isHost) {
+          hostEmails.add(g.user_email.toLowerCase());
+          hostRows.push({
+            name: g.user_name,
+            email: g.user_email,
+            role: "host",
+            approvalStatus: null,
+            eventName: event.name,
+            eventId: event.api_id,
+            location,
+          });
+        }
+      }
+
+      const guestRows: PersonRow[] = guests
+        .filter((g) => !hostEmails.has(g.user_email.toLowerCase()))
+        .map((g) => ({
+          name: g.user_name,
+          email: g.user_email,
+          role: "guest",
+          approvalStatus: g.approval_status,
           eventName: event.name,
           eventId: event.api_id,
           location,
-        });
-      }
+        }));
+
+      groups.push({
+        eventId: event.api_id,
+        eventName: event.name,
+        eventDate: event.start_at,
+        location,
+        eventUrl: event.url,
+        hosts: hostRows,
+        guests: guestRows,
+      });
     }
 
-    return NextResponse.json({ people: rows });
+    const people: PersonRow[] = groups.flatMap((g) => [...g.hosts, ...g.guests]);
+
+    return NextResponse.json({ people, groups });
   } catch (error) {
     console.error("Failed to fetch people:", error);
     return NextResponse.json(

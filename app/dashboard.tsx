@@ -1,6 +1,39 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+
+/* ── Fonts (shared with payments/foundation) ─────────────────────────────── */
+
+const FONT_URL =
+  "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap";
+
+function useFonts() {
+  useEffect(() => {
+    if (document.querySelector(`link[href="${FONT_URL}"]`)) return;
+    const p1 = document.createElement("link");
+    p1.rel = "preconnect";
+    p1.href = "https://fonts.googleapis.com";
+    document.head.appendChild(p1);
+    const p2 = document.createElement("link");
+    p2.rel = "preconnect";
+    p2.href = "https://fonts.gstatic.com";
+    p2.crossOrigin = "anonymous";
+    document.head.appendChild(p2);
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = FONT_URL;
+    document.head.appendChild(link);
+  }, []);
+}
+
+const font = {
+  display: "'Instrument Serif', Georgia, serif",
+  body: "'Plus Jakarta Sans', system-ui, sans-serif",
+  mono: "'IBM Plex Mono', monospace",
+};
+
+/* ── Types ────────────────────────────────────────────────────────────────── */
 
 interface LumaEvent {
   api_id: string;
@@ -8,6 +41,7 @@ interface LumaEvent {
   start_at: string;
   end_at: string;
   url: string | null;
+  cover_url: string | null;
   geo_address_json: {
     city?: string;
     country?: string;
@@ -15,38 +49,27 @@ interface LumaEvent {
   } | null;
 }
 
-interface PersonRow {
-  name: string;
-  email: string;
-  role: "host" | "guest";
-  eventName: string;
-  eventId: string;
-  location: string;
-}
-
 interface LocationOption {
   city: string;
   country: string;
 }
 
+/* ── Main Component ──────────────────────────────────────────────────────── */
+
 export default function Dashboard() {
+  useFonts();
+  const router = useRouter();
+
   const [events, setEvents] = useState<LumaEvent[]>([]);
-  const [people, setPeople] = useState<PersonRow[]>([]);
   const [locations, setLocations] = useState<LocationOption[]>([]);
   const [lastRefreshed, setLastRefreshed] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadingPeople, setLoadingPeople] = useState(false);
 
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedCity, setSelectedCity] = useState("");
   const [selectedCountry, setSelectedCountry] = useState("");
-  const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(
-    new Set()
-  );
-
-  const [activeTab, setActiveTab] = useState<"events" | "people">("events");
 
   const buildParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -73,53 +96,20 @@ export default function Dashboard() {
     }
   }, [buildParams]);
 
-  const fetchPeople = useCallback(async () => {
-    setLoadingPeople(true);
-    try {
-      const params = buildParams();
-      if (selectedEventIds.size > 0) {
-        params.set("eventIds", Array.from(selectedEventIds).join(","));
-      }
-      const res = await fetch(`/api/people?${params}`);
-      const data = await res.json();
-      setPeople(data.people || []);
-    } catch (err) {
-      console.error("Failed to fetch people:", err);
-    } finally {
-      setLoadingPeople(false);
-    }
-  }, [buildParams, selectedEventIds]);
-
   useEffect(() => {
     fetchEvents();
   }, [fetchEvents]);
-
-  useEffect(() => {
-    if (activeTab === "people") {
-      fetchPeople();
-    }
-  }, [activeTab, fetchPeople]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
       await fetch("/api/refresh", { method: "POST" });
       await fetchEvents();
-      if (activeTab === "people") await fetchPeople();
     } catch (err) {
       console.error("Refresh failed:", err);
     } finally {
       setRefreshing(false);
     }
-  };
-
-  const toggleEvent = (id: string) => {
-    setSelectedEventIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   const uniqueCountries = Array.from(
@@ -130,14 +120,6 @@ export default function Dashboard() {
     .map((l) => l.city);
   const uniqueCities = Array.from(new Set(filteredCities)).sort();
 
-  const uniquePeople = new Map<string, PersonRow>();
-  people.forEach((p) => {
-    const existing = uniquePeople.get(p.email);
-    if (!existing || p.role === "host") {
-      uniquePeople.set(p.email, p);
-    }
-  });
-
   const formatDate = (iso: string) => {
     const d = new Date(iso);
     return d.toLocaleDateString("en-US", {
@@ -147,97 +129,136 @@ export default function Dashboard() {
     });
   };
 
-  const formatDateTime = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  };
+  const getLocation = (event: LumaEvent) =>
+    event.geo_address_json
+      ? [event.geo_address_json.city, event.geo_address_json.country]
+          .filter(Boolean)
+          .join(", ") || "In-person"
+      : "Online";
 
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-              Superteam Events Dashboard
-            </h1>
-            {lastRefreshed && (
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Last refreshed: {formatDateTime(lastRefreshed)}
-              </p>
-            )}
+    <div className="min-h-screen bg-white" style={{ fontFamily: font.body }}>
+      {/* Header */}
+      <div className="border-b border-black/[0.06] sticky top-0 z-40 bg-white/95 backdrop-blur-sm">
+        <div className="max-w-[1200px] mx-auto px-8 py-5 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-[6px] h-[6px] rounded-full bg-black" />
+            <div>
+              <h1
+                style={{ fontFamily: font.display }}
+                className="text-[22px] font-normal text-black tracking-[-0.01em]"
+              >
+                Events <span className="italic">Dashboard</span>
+              </h1>
+              {lastRefreshed && (
+                <p className="text-[11px] text-black/30 tracking-wide mt-0.5">
+                  Last refreshed {formatDate(lastRefreshed)}
+                </p>
+              )}
+            </div>
           </div>
           <button
             onClick={handleRefresh}
             disabled={refreshing}
-            className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            className="flex items-center gap-2 text-[11px] font-medium tracking-[0.1em] uppercase text-black/35 hover:text-black/60 transition-colors disabled:opacity-30"
           >
-            {refreshing ? "Refreshing..." : "Refresh Data"}
+            <svg className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.015 4.356v4.992" />
+            </svg>
+            {refreshing ? "Refreshing" : "Refresh"}
           </button>
         </div>
-      </header>
+      </div>
 
-      {/* Filters */}
-      <div className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="mx-auto max-w-7xl px-6 py-4">
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                Date <span className="text-zinc-400">(1 day max)</span>
-              </label>
+      <div className="max-w-[1200px] mx-auto px-8 py-10">
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-[1px] bg-black/[0.06] mb-10">
+          {[
+            { label: "Total Events", value: events.length },
+            {
+              label: "Locations",
+              value: new Set(events.map((e) => e.geo_address_json?.city).filter(Boolean)).size,
+            },
+            {
+              label: "Countries",
+              value: new Set(events.map((e) => e.geo_address_json?.country).filter(Boolean)).size,
+            },
+          ].map((stat) => (
+            <div key={stat.label} className="bg-white p-6">
+              <div
+                style={{ fontFamily: font.display }}
+                className={`text-[32px] leading-none ${stat.value === 0 ? "text-black/15" : "text-black/80"}`}
+              >
+                {stat.value}
+              </div>
+              <div
+                className="text-[10px] font-medium tracking-[0.15em] uppercase mt-2"
+                style={{ opacity: stat.value > 0 ? 0.4 : 0.2 }}
+              >
+                {stat.label}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Table container */}
+        <div className="border border-black/[0.06]">
+          {/* Filters */}
+          <div className="px-6 py-3 border-b border-black/[0.06] bg-black/[0.01] flex items-center gap-4 flex-wrap">
+            <span className="text-[10px] font-medium tracking-[0.15em] uppercase text-black/30">
+              Date
+            </span>
+            <div className="flex items-center gap-2">
               <input
                 type="date"
                 value={startDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setEndDate(e.target.value);
-                }}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                onChange={(e) => setStartDate(e.target.value)}
+                style={{ fontFamily: font.mono }}
+                className="text-[11px] border border-black/[0.08] px-3 py-1.5 text-black/60 bg-white focus:outline-none focus:border-black/20 transition-colors"
+              />
+              <span className="text-[10px] text-black/20">to</span>
+              <input
+                type="date"
+                value={endDate}
+                min={startDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                style={{ fontFamily: font.mono }}
+                className="text-[11px] border border-black/[0.08] px-3 py-1.5 text-black/60 bg-white focus:outline-none focus:border-black/20 transition-colors"
               />
             </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                Country
-              </label>
-              <select
-                value={selectedCountry}
-                onChange={(e) => {
-                  setSelectedCountry(e.target.value);
-                  setSelectedCity("");
-                }}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-              >
-                <option value="">All Countries</option>
-                {uniqueCountries.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                City
-              </label>
-              <select
-                value={selectedCity}
-                onChange={(e) => setSelectedCity(e.target.value)}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-              >
-                <option value="">All Cities</option>
-                {uniqueCities.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-            {(startDate || selectedCity || selectedCountry) && (
+
+            <div className="w-[1px] h-4 bg-black/[0.08]" />
+
+            <span className="text-[10px] font-medium tracking-[0.15em] uppercase text-black/30">
+              Location
+            </span>
+            <select
+              value={selectedCountry}
+              onChange={(e) => {
+                setSelectedCountry(e.target.value);
+                setSelectedCity("");
+              }}
+              style={{ fontFamily: font.mono }}
+              className="text-[11px] border border-black/[0.08] px-3 py-1.5 text-black/60 bg-white focus:outline-none focus:border-black/20 transition-colors"
+            >
+              <option value="">All Countries</option>
+              {uniqueCountries.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <select
+              value={selectedCity}
+              onChange={(e) => setSelectedCity(e.target.value)}
+              style={{ fontFamily: font.mono }}
+              className="text-[11px] border border-black/[0.08] px-3 py-1.5 text-black/60 bg-white focus:outline-none focus:border-black/20 transition-colors"
+            >
+              <option value="">All Cities</option>
+              {uniqueCities.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+
+            {(startDate || endDate || selectedCity || selectedCountry) && (
               <button
                 onClick={() => {
                   setStartDate("");
@@ -245,229 +266,88 @@ export default function Dashboard() {
                   setSelectedCity("");
                   setSelectedCountry("");
                 }}
-                className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                className="text-[10px] text-black/25 hover:text-black/50 tracking-wide transition-colors ml-1"
               >
-                Clear Filters
+                Clear
               </button>
             )}
+
+            <span className="text-[11px] text-black/40 tracking-wide ml-auto">
+              {events.length} event{events.length !== 1 ? "s" : ""}
+            </span>
           </div>
-        </div>
-      </div>
 
-      {/* Tabs */}
-      <div className="mx-auto max-w-7xl px-6 pt-6">
-        <div className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
-          <button
-            onClick={() => setActiveTab("events")}
-            className={`px-4 py-2 text-sm font-medium transition ${
-              activeTab === "events"
-                ? "border-b-2 border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
-            }`}
-          >
-            Events ({events.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("people")}
-            className={`px-4 py-2 text-sm font-medium transition ${
-              activeTab === "people"
-                ? "border-b-2 border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
-            }`}
-          >
-            Hosts & Guests
-            {people.length > 0 && ` (${uniquePeople.size})`}
-          </button>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="mx-auto max-w-7xl px-6 py-6">
-        {activeTab === "events" && (
-          <>
-            {loading ? (
-              <div className="py-20 text-center text-zinc-500">
-                Loading events...
+          {/* Table */}
+          {loading ? (
+            <div className="flex items-center justify-center py-24">
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-6 h-6 border-[1.5px] border-black/10 border-t-black/60 rounded-full animate-spin" />
+                <p className="text-[12px] text-black/30 tracking-wide">Loading events</p>
               </div>
-            ) : events.length === 0 ? (
-              <div className="py-20 text-center text-zinc-500">
-                No events found matching your filters.
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/50">
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        <input
-                          type="checkbox"
-                          checked={
-                            selectedEventIds.size === events.length &&
-                            events.length > 0
-                          }
-                          onChange={() => {
-                            if (selectedEventIds.size === events.length) {
-                              setSelectedEventIds(new Set());
-                            } else {
-                              setSelectedEventIds(
-                                new Set(events.map((e) => e.api_id))
-                              );
-                            }
-                          }}
-                          className="rounded"
-                        />
-                      </th>
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Event Name
-                      </th>
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Date
-                      </th>
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Location
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {events.map((event) => (
-                      <tr
-                        key={event.api_id}
-                        className="border-b border-zinc-100 transition hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/30"
-                      >
-                        <td className="px-4 py-3">
-                          <input
-                            type="checkbox"
-                            checked={selectedEventIds.has(event.api_id)}
-                            onChange={() => toggleEvent(event.api_id)}
-                            className="rounded"
+            </div>
+          ) : events.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-24">
+              <p className="text-[13px] text-black/25 tracking-wide">No events found</p>
+            </div>
+          ) : (
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="border-b border-black/[0.06]">
+                  {["Event", "Date", "Location"].map((h) => (
+                    <th
+                      key={h}
+                      className="px-6 py-3 text-left text-[9px] font-medium tracking-[0.15em] uppercase text-black/30"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((event) => (
+                  <tr
+                    key={event.api_id}
+                    onClick={() => router.push(`/events/${event.api_id}`)}
+                    className="border-b border-black/[0.04] transition-colors hover:bg-black/[0.015] cursor-pointer group"
+                  >
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        {event.cover_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={event.cover_url}
+                            alt=""
+                            className="w-10 h-10 object-cover shrink-0"
+                            style={{ backgroundColor: "rgba(0,0,0,0.03)" }}
                           />
-                        </td>
-                        <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                          {event.url ? (
-                            <a
-                              href={event.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="hover:underline"
-                            >
-                              {event.name}
-                            </a>
-                          ) : (
-                            event.name
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                          {formatDate(event.start_at)}
-                        </td>
-                        <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                          {event.geo_address_json
-                            ? [
-                                event.geo_address_json.city,
-                                event.geo_address_json.country,
-                              ]
-                                .filter(Boolean)
-                                .join(", ") || "In-person"
-                            : "Online"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            {selectedEventIds.size > 0 && (
-              <div className="mt-4 flex items-center gap-3">
-                <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                  {selectedEventIds.size} event(s) selected
-                </span>
-                <button
-                  onClick={() => setActiveTab("people")}
-                  className="rounded-md bg-zinc-900 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-                >
-                  View Hosts & Guests
-                </button>
-              </div>
-            )}
-          </>
-        )}
+                        ) : (
+                          <div className="w-10 h-10 shrink-0 bg-black/[0.03]" />
+                        )}
+                        <span className="font-medium text-black group-hover:underline underline-offset-2 decoration-black/20">
+                          {event.name}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-black/40">{formatDate(event.start_at)}</td>
+                    <td className="px-6 py-4 text-black/40">
+                      <div className="flex items-center justify-between">
+                        <span>{getLocation(event)}</span>
+                        <svg className="w-3.5 h-3.5 text-black/15 group-hover:text-black/40 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                        </svg>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
 
-        {activeTab === "people" && (
-          <>
-            {loadingPeople ? (
-              <div className="py-20 text-center text-zinc-500">
-                Loading people...
-              </div>
-            ) : people.length === 0 ? (
-              <div className="py-20 text-center text-zinc-500">
-                {selectedEventIds.size > 0
-                  ? "No people found for the selected events."
-                  : "No people found. Try adjusting your filters or selecting specific events."}
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-                <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                    Showing {uniquePeople.size} unique people across{" "}
-                    {people.length} registrations
-                  </p>
-                </div>
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900/50">
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Name
-                      </th>
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Role
-                      </th>
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Email
-                      </th>
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Event
-                      </th>
-                      <th className="px-4 py-3 font-medium text-zinc-600 dark:text-zinc-400">
-                        Location
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {people.map((person, i) => (
-                      <tr
-                        key={`${person.email}-${person.eventId}-${i}`}
-                        className="border-b border-zinc-100 transition hover:bg-zinc-50 dark:border-zinc-800/50 dark:hover:bg-zinc-800/30"
-                      >
-                        <td className="px-4 py-3 font-medium text-zinc-900 dark:text-zinc-100">
-                          {person.name || "-"}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                              person.role === "host"
-                                ? "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-                                : "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                            }`}
-                          >
-                            {person.role}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                          {person.email}
-                        </td>
-                        <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                          {person.eventName}
-                        </td>
-                        <td className="px-4 py-3 text-zinc-600 dark:text-zinc-400">
-                          {person.location}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
-        )}
+        {/* Footer */}
+        <p className="text-[11px] text-center text-black/20 mt-5 tracking-wide">
+          Click any event to view hosts, guests & details
+        </p>
       </div>
     </div>
   );

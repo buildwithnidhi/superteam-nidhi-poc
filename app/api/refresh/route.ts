@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
-import { getEvents } from "@/lib/luma";
+import { getData } from "@/lib/luma";
 
 export async function POST() {
   try {
-    const data = await getEvents(true);
+    const data = await getData(true);
     return NextResponse.json({
       success: true,
       lastRefreshed: data.lastRefreshed,
       eventCount: data.events.length,
+      peopleCount: data.people.length,
     });
   } catch (error) {
     console.error("Failed to refresh data:", error);

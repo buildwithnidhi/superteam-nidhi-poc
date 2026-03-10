@@ -17,10 +17,19 @@ export interface LumaEvent {
   geo_latitude: string | null;
   geo_longitude: string | null;
   timezone: string | null;
+  creator_api_id: string | null; // user_api_id from event — the event creator
+}
+
+export interface LumaHost {
+  api_id: string;
+  name: string;
+  email: string;
+  avatar_url: string | null;
 }
 
 export interface LumaGuest {
   api_id: string;
+  user_api_id: string | null; // matches event.creator_api_id for hosts
   user_name: string;
   user_email: string;
   approval_status: string;
@@ -54,5 +63,7 @@ export interface CachedData {
   events: LumaEvent[];
   people: LumaPerson[];
   eventGuests: Record<string, LumaGuest[]>;
+  eventHosts: Record<string, LumaHost[]>;
   lastRefreshed: string;
+  peopleLastFetched?: string; // separate TTL for people list
 }
