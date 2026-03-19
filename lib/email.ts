@@ -254,7 +254,7 @@ export async function sendCorrectionRequestEmail({
   recipientEmail: string;
   recipientName: string;
   projectName: string;
-  flags: Array<{ level: "hard" | "soft"; type: "name" | "wallet" | "amount"; message: string }>;
+  flags: Array<{ level: "hard" | "soft"; type: "name" | "wallet" | "amount" | "contractor"; message: string }>;
 }) {
   const hasNameFlag = flags.some((f) => f.type === "name");
 
