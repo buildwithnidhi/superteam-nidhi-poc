@@ -16,7 +16,9 @@ export async function GET(req: NextRequest) {
     for (const record of all) {
       const history = all.filter((r) => r.id !== record.id);
       const flags   = analyzePaymentFlags(record, history);
-      const analysis = flags.length > 0 ? flags.map((f) => `${f.level.toUpperCase()}: ${f.message}`).join(" | ") : "Clear";
+      // Analysis is a select field — only "Alert" or "Clear" are valid options.
+      // Ask Pratik to change it to a Text field to store full flag detail.
+      const analysis = flags.length > 0 ? "Alert" : "Clear";
 
       // Only update if the value has changed
       if (record.fields["Analysis"] !== analysis) {
