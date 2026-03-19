@@ -1,104 +1,162 @@
 /**
- * AIRTABLE AUTOMATION SCRIPT
+ * AIRTABLE AUTOMATION SCRIPT — paste this into an Airtable "Run a script" action
  * ─────────────────────────────────────────────────────────────────────────────
- * Setup instructions:
- *  1. In Airtable → Automations → Create automation
- *  2. Trigger: "When a record is created"  (or "When record matches conditions")
- *  3. Action: "Run a script"
- *  4. Add input variable:  name = "recordId",  value = Trigger > Record ID
- *  5. Paste this entire script into the script editor
+ * Setup:
+ *  1. Automations → + New automation
+ *  2. Trigger: "When a record is created"
+ *  3. + Add action → "Run a script"
+ *  4. Under "Input variables" add one:
+ *       Name:  recordId
+ *       Value: Trigger → Airtable record ID
+ *  5. Paste this entire script → Save → Turn on
  * ─────────────────────────────────────────────────────────────────────────────
  *
- * Checks performed on every new record:
- *  1. Amount > $10,000                          → SOFT flag
- *  2. Same wallet, completely different name    → HARD flag
- *  3. Same wallet, same words different order   → SOFT flag
- *  4. Same name, different wallet address       → SOFT flag
+ * Checks:
+ *  1. Same wallet, completely different name        → [HARD] name mismatch
+ *  2. Same wallet, same words different order       → [SOFT] name mismatch
+ *  3. Same wallet, partial name overlap             → [SOFT] name mismatch
+ *  4. Same name, different wallet                   → [SOFT] wallet-person mismatch
+ *  5. Amount > $10,000                              → [SOFT] high amount
+ *  6. Bounty/grant but scope looks like contractor  → [SOFT] contractor scope
  *
- * Output: written to the "Analysis" field as pipe-separated labels, e.g.
- *   "HARD: Name mismatch (was: John Doe) | SOFT: Wallet changed"
- *   or "Clear" if no flags raised.
+ * Writes to:
+ *  - Analysis     (select field) → "Alert" or "Clear"
+ *  - Flag Reasons (text field)   → short labels + full detail
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
 const { recordId } = input.config();
 
-const table = base.getTable("Payments"); // change if your table name differs
+const table = base.getTable("Payments"); // ← change if your table name differs
 
-// Fetch the triggering record
 const record = await table.selectRecordAsync(recordId, {
-  fields: ["Name", "Wallet Address", "Amount"],
+  fields: ["Name", "Wallet Address", "Amount", "Purpose of Payment", "Details", "Category", "Status"],
 });
 
-// Fetch all records for cross-referencing (only fields we need)
 const allResult = await table.selectRecordsAsync({
-  fields: ["Name", "Wallet Address", "Amount", "Status"],
+  fields: ["Name", "Wallet Address", "Amount", "Purpose of Payment", "Details", "Category", "Status"],
 });
 
-const name   = (record.getCellValueAsString("Name") || "").trim();
-const wallet = (record.getCellValueAsString("Wallet Address") || "").trim();
-const amountStr = record.getCellValueAsString("Amount") || "0";
-const amount = parseFloat(amountStr.replace(/[^0-9.]/g, "")) || 0;
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-// Historical = all records except the current one that are verified/paid
-// Adjust the Status filter below to match your real data (e.g. "Paid", "Sent")
-const history = allResult.records.filter(
-  (r) => r.id !== recordId && r.getCellValueAsString("Status") === "Verified"
-);
-
-const flags = [];
-
-// ── Check 1: Large amount ────────────────────────────────────────────────────
-if (amount > 10000) {
-  flags.push(`SOFT: Large amount (${amountStr}) — flagged for awareness`);
+function wordSet(str) {
+  return new Set(str.toLowerCase().split(/\s+/).filter(Boolean));
 }
 
-// ── Check 2 & 3: Same wallet → different name ────────────────────────────────
+function similarity(a, b) {
+  const setA = wordSet(a), setB = wordSet(b);
+  const overlap = [...setA].filter(w => setB.has(w)).length;
+  return overlap / Math.max(setA.size, setB.size);
+}
+
+// ── Current record values ────────────────────────────────────────────────────
+
+const name    = (record.getCellValueAsString("Name") || "").trim();
+const wallet  = (record.getCellValueAsString("Wallet Address") || "").trim();
+const amtStr  = record.getCellValueAsString("Amount") || "0";
+const amount  = parseFloat(amtStr.replace(/[^0-9.]/g, "")) || 0;
+const purpose = (record.getCellValueAsString("Purpose of Payment") || "").toLowerCase();
+const details = (record.getCellValueAsString("Details") || "").toLowerCase();
+const category = (record.getCellValueAsString("Category") || "").toLowerCase();
+const combined = `${purpose} ${details}`;
+
+// ── Historical records (all verified except current) ─────────────────────────
+
+const history = allResult.records.filter(r =>
+  r.id !== recordId &&
+  r.getCellValueAsString("Status") === "Verified"
+);
+
+const flags = []; // { level, type, message }
+
+// ── Check 1: Amount > $10,000 ────────────────────────────────────────────────
+
+if (amount > 10000) {
+  flags.push({ level: "SOFT", type: "high amount", message: `Large grant amount (${amtStr}) — flagged for internal awareness` });
+}
+
+// ── Check 2–3–4: Wallet → name consistency ───────────────────────────────────
+
 if (wallet) {
   const walletLower = wallet.toLowerCase();
-  const sameWallet = history.filter(
-    (r) => r.getCellValueAsString("Wallet Address").toLowerCase() === walletLower
+  const sameWallet = history.filter(r =>
+    r.getCellValueAsString("Wallet Address").toLowerCase() === walletLower
   );
 
   for (const prev of sameWallet) {
     const prevName = prev.getCellValueAsString("Name").trim();
     if (!prevName || prevName.toLowerCase() === name.toLowerCase()) continue;
 
-    const nameWords = new Set(name.toLowerCase().split(/\s+/).filter(Boolean));
-    const prevWords = new Set(prevName.toLowerCase().split(/\s+/).filter(Boolean));
-    const overlap   = [...nameWords].filter((w) => prevWords.has(w)).length;
-    const similarity = overlap / Math.max(nameWords.size, prevWords.size);
+    const sim = similarity(name, prevName);
 
-    if (similarity === 1.0) {
-      flags.push(`SOFT: Name order differs (wallet was registered as "${prevName}")`);
-    } else if (similarity >= 0.5) {
-      flags.push(`SOFT: Name partially differs (wallet was registered as "${prevName}")`);
+    if (sim === 1.0) {
+      flags.push({ level: "SOFT", type: "name mismatch", message: `Name order differs — wallet was registered as "${prevName}"` });
+    } else if (sim >= 0.5) {
+      flags.push({ level: "SOFT", type: "name mismatch", message: `Name partially differs — wallet was registered as "${prevName}"` });
     } else {
-      flags.push(`HARD: Name mismatch — wallet was registered as "${prevName}"`);
+      flags.push({ level: "HARD", type: "name mismatch", message: `Name mismatch — wallet was previously registered as "${prevName}"` });
     }
     break;
   }
 }
 
-// ── Check 4: Same name → different wallet ────────────────────────────────────
+// ── Check 5: Name → wallet consistency ──────────────────────────────────────
+
 if (name && wallet) {
   const walletLower = wallet.toLowerCase();
-  const sameName = history.filter(
-    (r) => r.getCellValueAsString("Name").toLowerCase() === name.toLowerCase()
+  const sameName = history.filter(r =>
+    r.getCellValueAsString("Name").toLowerCase() === name.toLowerCase()
   );
 
   for (const prev of sameName) {
     const prevWallet = prev.getCellValueAsString("Wallet Address").trim();
     if (prevWallet && prevWallet.toLowerCase() !== walletLower) {
       const short = prevWallet.slice(0, 6) + "…" + prevWallet.slice(-4);
-      flags.push(`SOFT: Wallet changed — "${name}" previously used ${short}`);
+      flags.push({ level: "SOFT", type: "wallet-person mismatch", message: `Wallet address changed — "${name}" previously used ${short}` });
       break;
     }
   }
 }
 
-// ── Write result back to Airtable ────────────────────────────────────────────
-const analysis = flags.length > 0 ? flags.join(" | ") : "Clear";
-await table.updateRecordAsync(recordId, { Analysis: analysis });
+// ── Check 6: Contractor/freelancer scope in bounty/grant ────────────────────
 
-console.log(`Record ${recordId} → ${analysis}`);
+const ROLE_PATTERNS = [
+  /\bdevrel\b/, /\bdeveloper\s+relations?\b/, /\bdev\s+rel\b/,
+  /\bpartnership[s]?\b/, /\bbd\s+manager\b/, /\bbusiness\s+development\b/,
+  /\bcommunity\s+manager\b/, /\bhead\s+of\b/, /\blead\s+for\b/,
+  /\bcontractor\b/, /\bfreelancer\b/, /\bretainer\b/,
+  /\bonboarding\s+manager\b/, /\bgrowth\s+manager\b/,
+  /\bmonthly\s+(pay|compensation|salary|stipend)\b/,
+  /\bhiring\b.*\bsuperteam\b/, /\bsuperteam\b.*\bhiring\b/,
+];
+const ROLE_KEYWORDS = [
+  "ambassador", "evangelist", "moderator hired", "paid role",
+  "ongoing role", "monthly role", "part-time", "full-time",
+];
+
+const isRolePattern = ROLE_PATTERNS.some(re => re.test(combined));
+const isRoleKeyword = ROLE_KEYWORDS.some(kw => combined.includes(kw));
+const isBountyOrGrant = category.includes("bounty") || category.includes("grant");
+
+if ((isRolePattern || isRoleKeyword) && isBountyOrGrant) {
+  flags.push({
+    level: "SOFT",
+    type: "contractor scope",
+    message: "Scope resembles a contractor/freelancer role — should come from Superteam's own budget, not the foundation",
+  });
+}
+
+// ── Write results back ───────────────────────────────────────────────────────
+
+const analysis = flags.length > 0 ? "Alert" : "Clear";
+
+const uniqueLabels = [...new Set(flags.map(f => f.type))].join(", ");
+const detail = flags.map(f => `[${f.level}] ${f.message}`).join("\n");
+const flagReasons = flags.length > 0 ? `${uniqueLabels}\n\n${detail}` : "";
+
+await table.updateRecordAsync(recordId, {
+  "Analysis": analysis,
+  "Flag Reasons": flagReasons,
+});
+
+console.log(`${name} → ${analysis}${flags.length > 0 ? `: ${uniqueLabels}` : ""}`);
