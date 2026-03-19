@@ -55,6 +55,12 @@ const clr = {
 
 /* ── Types ────────────────────────────────────────────────────────────────── */
 
+interface PaymentFlag {
+  level: "hard" | "soft";
+  type: "name" | "wallet" | "amount";
+  message: string;
+}
+
 interface Payment {
   id: string;
   name: string;
@@ -77,6 +83,7 @@ interface Payment {
   proofOfWork: string;
   discordUsername: string;
   dateAdded: string;
+  flags: PaymentFlag[];
 }
 
 type FilterType = "all" | "pending" | "sent" | "accepted" | "rejected";
@@ -90,6 +97,8 @@ export default function PaymentsDashboard() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
+  const [sendingCorrection, setSendingCorrection] = useState<Set<string>>(new Set());
+  const [sentCorrection, setSentCorrection] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<FilterType>("pending");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -153,6 +162,7 @@ export default function PaymentsDashboard() {
         proofOfWork: r.fields["Proof of Work"] || "",
         discordUsername: r.fields["Discord / Earn Username"] || "",
         dateAdded: r.fields["Date Added"] || "",
+        flags: (r as { flags?: PaymentFlag[] }).flags || [],
       }));
       setPayments(mapped);
     } catch {
@@ -181,7 +191,7 @@ export default function PaymentsDashboard() {
   });
 
   const pendingPayments = payments.filter((p) => !p.paymentStatus || p.paymentStatus === "Pending Review");
-  const alertCount = pendingPayments.filter((p) => p.analysis === "Alert").length;
+  const alertCount = pendingPayments.filter((p) => p.analysis === "Alert" || p.flags.some((f) => f.level === "hard")).length;
   const totalPendingUSDC = pendingPayments.reduce((sum, p) => {
     const match = p.amount.match(/[\d,]+/);
     return sum + (match ? parseInt(match[0].replace(/,/g, "")) : 0);
@@ -196,12 +206,37 @@ export default function PaymentsDashboard() {
     });
   };
 
+  const hasHardFlag = (p: Payment) =>
+    p.analysis === "Alert" || p.flags.some((f) => f.level === "hard");
+
   const selectAll = () => {
     const pendingIds = filtered
       .filter((p) => !p.paymentStatus || p.paymentStatus === "Pending Review")
-      .filter((p) => p.analysis !== "Alert")
+      .filter((p) => !hasHardFlag(p))
       .map((p) => p.id);
     setSelected(new Set(pendingIds));
+  };
+
+  const requestCorrection = async (id: string) => {
+    setSendingCorrection((prev) => new Set([...prev, id]));
+    try {
+      const res = await fetch("/api/payments/request-correction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId: id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSentCorrection((prev) => new Set([...prev, id]));
+        showToast("success", "Correction request sent");
+      } else {
+        showToast("error", data.error || "Failed to send email");
+      }
+    } catch {
+      showToast("error", "Network error");
+    } finally {
+      setSendingCorrection((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    }
   };
 
   const clearAll = () => setSelected(new Set());
@@ -506,8 +541,8 @@ export default function PaymentsDashboard() {
                         className="border-b border-black/[0.04] transition-colors hover:bg-black/[0.01]"
                         style={{
                           backgroundColor: selected.has(p.id) ? "rgba(0,0,0,0.02)" : undefined,
-                          borderLeftWidth: p.analysis === "Alert" ? "2px" : undefined,
-                          borderLeftColor: p.analysis === "Alert" ? clr.pending.dot : undefined,
+                          borderLeftWidth: hasHardFlag(p) ? "2px" : p.flags.some(f => f.level === "soft") ? "2px" : undefined,
+                          borderLeftColor: hasHardFlag(p) ? clr.reject.dot : p.flags.some(f => f.level === "soft") ? clr.pending.dot : undefined,
                         }}
                       >
                         <td className="px-6 py-4">
@@ -552,26 +587,30 @@ export default function PaymentsDashboard() {
                           </span>
                         </td>
                         <td className="px-4 py-4">
-                          <div className="flex items-center gap-1.5">
-                            {p.analysis === "Alert" && (
+                          <div className="flex flex-col gap-1">
+                            {p.flags.map((f, fi) => (
                               <span
-                                className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium tracking-wide"
-                                style={{ color: clr.pending.text, backgroundColor: clr.pending.bg }}
+                                key={fi}
+                                className="inline-flex items-start gap-1 px-2 py-0.5 text-[10px] font-medium tracking-wide leading-relaxed"
+                                style={{
+                                  color: f.level === "hard" ? clr.reject.text : clr.pending.text,
+                                  backgroundColor: f.level === "hard" ? clr.reject.bg : clr.pending.bg,
+                                }}
                               >
-                                <AlertTriangle className="w-2.5 h-2.5" strokeWidth={1.5} />
-                                Alert
+                                <AlertTriangle className="w-2.5 h-2.5 mt-[1px] flex-shrink-0" strokeWidth={1.5} />
+                                {f.message}
                               </span>
-                            )}
+                            ))}
                             {!p.waChars && (
                               <span
                                 className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium tracking-wide"
                                 style={{ color: clr.reject.text, backgroundColor: clr.reject.bg }}
                               >
                                 <X className="w-2.5 h-2.5" strokeWidth={2} />
-                                Wallet
+                                Invalid wallet chars
                               </span>
                             )}
-                            {p.analysis !== "Alert" && p.waChars && (
+                            {p.flags.length === 0 && p.waChars && (
                               <span className="text-[11px] text-black/10">—</span>
                             )}
                           </div>
@@ -587,7 +626,7 @@ export default function PaymentsDashboard() {
                         <td className="px-4 py-4">
                           <button
                             onClick={() => setExpandedRow(isExpanded ? null : p.id)}
-                            className="text-black/20 hover:text-black/50 p-1 transition-colors"
+                            className="text-black/50 hover:text-black p-1 transition-colors"
                           >
                             {isExpanded ? <ChevronUp className="w-3.5 h-3.5" strokeWidth={1.5} /> : <ChevronDown className="w-3.5 h-3.5" strokeWidth={1.5} />}
                           </button>
@@ -648,6 +687,48 @@ export default function PaymentsDashboard() {
                                 </div>
                               </div>
                             </div>
+
+                            {/* Flag details + correction action */}
+                            {p.flags.length > 0 && (
+                              <div className="mt-5 pt-5 border-t border-black/[0.06] flex items-start justify-between gap-6">
+                                <div className="flex-1">
+                                  <p className="text-[9px] font-medium tracking-[0.15em] uppercase text-black/30 mb-2">
+                                    Pre-send Flags
+                                  </p>
+                                  <div className="space-y-1.5">
+                                    {p.flags.map((f, fi) => (
+                                      <div key={fi} className="flex items-start gap-2">
+                                        <div
+                                          className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
+                                          style={{ backgroundColor: f.level === "hard" ? clr.reject.dot : clr.pending.dot }}
+                                        />
+                                        <span className="text-[12px] text-black/60 leading-relaxed">{f.message}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                {p.flags.some((f) => f.type === "name" || f.type === "wallet") && (
+                                  <button
+                                    onClick={() => requestCorrection(p.id)}
+                                    disabled={sendingCorrection.has(p.id) || sentCorrection.has(p.id)}
+                                    className="flex items-center gap-2 text-[11px] font-medium tracking-[0.08em] uppercase px-4 py-2 flex-shrink-0 transition-all duration-200 disabled:opacity-40"
+                                    style={{
+                                      color: sentCorrection.has(p.id) ? clr.accept.text : clr.reject.text,
+                                      backgroundColor: sentCorrection.has(p.id) ? clr.accept.bg : clr.reject.bg,
+                                      border: `1px solid ${sentCorrection.has(p.id) ? clr.accept.border : clr.reject.border}`,
+                                    }}
+                                  >
+                                    {sendingCorrection.has(p.id) ? (
+                                      <><Loader2 className="w-3 h-3 animate-spin" strokeWidth={2} />Sending…</>
+                                    ) : sentCorrection.has(p.id) ? (
+                                      <><Check className="w-3 h-3" strokeWidth={2} />Email sent</>
+                                    ) : (
+                                      <><Send className="w-3 h-3" strokeWidth={1.5} />Request Correction</>
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </td>
                         </tr>
                       )}
@@ -661,7 +742,7 @@ export default function PaymentsDashboard() {
 
         {/* Footer note */}
         <p className="text-[11px] text-center text-black/20 mt-5 tracking-wide">
-          Payments marked <span style={{ color: clr.pending.text }} className="font-medium">Alert</span> are automatically excluded from batch selection
+          Payments with <span style={{ color: clr.reject.text }} className="font-medium">hard flags</span> are automatically excluded from batch selection · Use <span style={{ color: clr.pending.text }} className="font-medium">Request Correction</span> to email the recipient
         </p>
       </div>
     </div>

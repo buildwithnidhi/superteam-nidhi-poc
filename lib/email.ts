@@ -246,6 +246,125 @@ export async function sendRejectionEmail({
   });
 }
 
+export async function sendCorrectionRequestEmail({
+  recipientName,
+  projectName,
+  flags,
+}: {
+  recipientEmail: string;
+  recipientName: string;
+  projectName: string;
+  flags: Array<{ level: "hard" | "soft"; type: "name" | "wallet" | "amount"; message: string }>;
+}) {
+  const hasNameFlag = flags.some((f) => f.type === "name");
+
+  // Determine subject + headline based on flag type
+  const subject = hasNameFlag
+    ? `Action Required: Update your name on Superteam Earn`
+    : `Action Required: Update your wallet address on Superteam Earn`;
+
+  const headline = hasNameFlag
+    ? "Your name needs to be updated"
+    : "Your wallet address needs to be updated";
+
+  const intro = hasNameFlag
+    ? `Your payment request for <strong>"${projectName}"</strong> was flagged because the name on your submission doesn't match the name previously associated with your wallet in our records.`
+    : `Your payment request for <strong>"${projectName}"</strong> was flagged because the wallet address you submitted doesn't match what we have on record for your account.`;
+
+  // Build step-by-step instructions
+  const steps = hasNameFlag
+    ? [
+        `Go to your Superteam Earn profile: <a href="https://earn.superteam.fun/profile" style="color:#111;text-decoration:underline;">earn.superteam.fun/profile</a>`,
+        `Update your display name to match the name you previously used for payments`,
+        `Contact your Superteam approver and ask them to resubmit your payment`,
+      ]
+    : [
+        `Log in to Superteam Earn: <a href="https://earn.superteam.fun/profile" style="color:#111;text-decoration:underline;">earn.superteam.fun/profile</a>`,
+        `Go to your profile settings and update your wallet address`,
+        `Make sure the new wallet address is the one you want payments sent to`,
+        `Contact your Superteam approver and ask them to resubmit your payment`,
+      ];
+
+  const stepsHtml = steps
+    .map(
+      (step, i) => `
+        <tr>
+          <td style="padding:10px 0;vertical-align:top;width:28px;">
+            <span style="font-size:12px;color:#999;font-family:${monoFont};font-weight:500;">${String(i + 1).padStart(2, "0")}</span>
+          </td>
+          <td style="padding:10px 0 10px 12px;font-size:14px;color:#333;line-height:1.6;">${step}</td>
+        </tr>`
+    )
+    .join("");
+
+  // Show the specific flag message(s) (name or wallet only — not amount)
+  const relevantFlags = flags.filter((f) => f.type === "name" || f.type === "wallet");
+  const flagRows = relevantFlags
+    .map(
+      (f) => `
+      <tr>
+        <td style="padding:14px 16px;border-bottom:1px solid #f0f0f0;">
+          <div style="display:flex;align-items:flex-start;gap:10px;">
+            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${
+              f.level === "hard" ? "#ef4444" : "#f59e0b"
+            };flex-shrink:0;margin-top:5px;"></span>
+            <span style="font-size:13px;color:#555;line-height:1.6;">${f.message}</span>
+          </div>
+        </td>
+      </tr>`
+    )
+    .join("");
+
+  const content = `
+          <!-- Header -->
+          <tr>
+            <td style="background:#111;padding:36px 40px;">
+              <div style="font-size:11px;color:rgba(255,255,255,0.5);letter-spacing:0.12em;text-transform:uppercase;margin-bottom:16px;">Action Required</div>
+              <h1 style="margin:0 0 8px;color:#fff;font-family:${emailFont};font-size:24px;font-weight:400;line-height:1.3;">${headline}</h1>
+              <p style="margin:0;color:rgba(255,255,255,0.5);font-size:13px;">${projectName}</p>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:32px 40px 0;">
+              <p style="color:#333;font-size:14px;line-height:1.7;">Hi ${recipientName},</p>
+              <p style="color:#333;font-size:14px;line-height:1.7;">${intro}</p>
+            </td>
+          </tr>
+
+          ${relevantFlags.length > 0 ? `
+          <!-- Issue detail -->
+          <tr>
+            <td style="padding:20px 40px 0;">
+              <div style="font-size:11px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">What was flagged</div>
+              <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e5e5;">
+                ${flagRows}
+              </table>
+            </td>
+          </tr>` : ""}
+
+          <!-- Steps -->
+          <tr>
+            <td style="padding:28px 40px 0;">
+              <div style="font-size:11px;font-weight:600;color:#999;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:14px;">Steps to resolve</div>
+              <table cellpadding="0" cellspacing="0" width="100%">
+                ${stepsHtml}
+              </table>
+            </td>
+          </tr>
+
+          <tr><td style="height:32px;"></td></tr>`;
+
+  // Always redirect to test inbox in test environment
+  await resend.emails.send({
+    from: FROM,
+    to: ["nidhiajain2003@gmail.com"],
+    subject,
+    html: emailShell(content),
+  });
+}
+
 export async function sendAcceptanceEmail({
   recipientEmail,
   recipientName,
