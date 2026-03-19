@@ -123,13 +123,14 @@ export function analyzePaymentFlags(
   const amountStr = record.fields["Amount"] || "0";
   const amount = parseFloat(amountStr.replace(/[^0-9.]/g, "")) || 0;
 
-  // Historical = previously accepted records (not the current one)
+  // Historical = previously accepted/verified records (not the current one)
   const history = allRecords.filter(
     (r) =>
       r.id !== record.id &&
       (r.fields["Foundation Decision"] === "Accepted" ||
         r.fields["Payment Status"] === "Accepted" ||
-        r.fields["Payment Status"] === "Sent to Superteam")
+        r.fields["Payment Status"] === "Sent to Superteam" ||
+        r.fields["Status"] === "Verified")
   );
 
   // Rule 1: Amount > $10,000 — internal note only, does not block
