@@ -34,6 +34,7 @@ export interface AirtableRecord {
     "Foundation Decision"?: string;
     "Rejection Reason"?: string;
     "Batch Id"?: string;
+    "Flag Reasons"?: string;
   };
 }
 
@@ -108,7 +109,7 @@ export async function updateRecord(
 
 export interface PaymentFlag {
   level: "hard" | "soft";
-  type: "name" | "wallet" | "amount";
+  type: "name" | "wallet" | "amount" | "contractor";
   message: string;
 }
 
@@ -198,6 +199,42 @@ export function analyzePaymentFlags(
         break;
       }
     }
+  }
+
+  // Rule 5: Contractor/freelancer scope disguised as bounty
+  // Superteams have a separate budget for hiring — these should NOT go through the foundation
+  const purpose = (record.fields["Purpose of Payment"] || "").toLowerCase();
+  const details = (record.fields["Details"] || "").toLowerCase();
+  const category = (record.fields["Category"] || "").toLowerCase();
+  const combined = `${purpose} ${details}`;
+
+  const ROLE_PATTERNS = [
+    /\bdevrel\b/, /\bdeveloper\s+relations?\b/, /\bdev\s+rel\b/,
+    /\bpartnership[s]?\b/, /\bbd\s+manager\b/, /\bbusiness\s+development\b/,
+    /\bcommunity\s+manager\b/, /\bhead\s+of\b/, /\blead\s+for\b/,
+    /\bcontractor\b/, /\bfreelancer\b/, /\bretainer\b/,
+    /\bonboarding\s+manager\b/, /\bgrowth\s+manager\b/,
+    /\bmonthly\s+(pay|compensation|salary|stipend)\b/,
+    /\bhiring\b.*\bsuperteam\b/, /\bsuperteam\b.*\bhiring\b/,
+  ];
+
+  const ROLE_KEYWORDS = [
+    "ambassador", "evangelist", "moderator hired", "paid role",
+    "ongoing role", "monthly role", "part.time", "full.time",
+  ];
+
+  const isRolePattern = ROLE_PATTERNS.some((re) => re.test(combined));
+  const isRoleKeyword = ROLE_KEYWORDS.some((kw) => combined.includes(kw));
+
+  // Only flag if it looks like a bounty/grant category but has contractor-like scope
+  const isBountyOrGrant = category.includes("bounty") || category.includes("grant");
+
+  if ((isRolePattern || isRoleKeyword) && isBountyOrGrant) {
+    flags.push({
+      level: "soft",
+      type: "contractor",
+      message: `Scope resembles a contractor/freelancer role — should come from Superteam's own budget, not foundation`,
+    });
   }
 
   return flags;
