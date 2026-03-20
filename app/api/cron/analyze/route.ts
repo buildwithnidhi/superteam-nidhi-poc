@@ -13,24 +13,13 @@ export async function GET(req: NextRequest) {
 
     const updates: Array<{ id: string; fields: { Analysis: string; "Flag Reasons": string } }> = [];
 
-    const FLAG_LABELS: Record<string, string> = {
-      name: "name mismatch",
-      wallet: "wallet-person mismatch",
-      amount: "high amount",
-      contractor: "contractor scope",
-    };
-
     for (const record of all) {
-      const history    = all.filter((r) => r.id !== record.id);
-      const flags      = analyzePaymentFlags(record, history);
-      const analysis   = flags.length > 0 ? "Alert" : "Clear";
-      const flagLabels = flags.length > 0
-        ? [...new Set(flags.map((f) => FLAG_LABELS[f.type] || f.type))].join(", ")
-        : "";
-      const flagDetail = flags.length > 0
-        ? flags.map((f) => `[${f.level.toUpperCase()}] ${f.message}`).join("\n")
-        : "";
-      const flagReasons = flagLabels ? `${flagLabels}\n\n${flagDetail}` : "";
+      const history  = all.filter((r) => r.id !== record.id);
+      const flags    = analyzePaymentFlags(record, history);
+      const analysis = flags.length > 0 ? "Alert" : "Clear";
+      const flagReasons = flags
+        .map((f) => `${f.level === "hard" ? "🔴" : "🟡"} ${f.message}`)
+        .join("\n");
 
       const changed =
         record.fields["Analysis"] !== analysis ||

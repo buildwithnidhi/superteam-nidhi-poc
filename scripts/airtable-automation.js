@@ -27,7 +27,7 @@
 
 const { recordId } = input.config();
 
-const table = base.getTable("Payments"); // ← change if your table name differs
+const table = base.getTable("Imported table"); // ← change if your table name differs
 
 const record = await table.selectRecordAsync(recordId, {
   fields: ["Name", "Wallet Address", "Amount", "Purpose of Payment", "Details", "Category", "Status"],
@@ -149,10 +149,9 @@ if ((isRolePattern || isRoleKeyword) && isBountyOrGrant) {
 // ── Write results back ───────────────────────────────────────────────────────
 
 const analysis = flags.length > 0 ? "Alert" : "Clear";
-
-const uniqueLabels = [...new Set(flags.map(f => f.type))].join(", ");
-const detail = flags.map(f => `[${f.level}] ${f.message}`).join("\n");
-const flagReasons = flags.length > 0 ? `${uniqueLabels}\n\n${detail}` : "";
+const flagReasons = flags
+  .map(f => `${f.level === "HARD" ? "🔴" : "🟡"} ${f.message}`)
+  .join("\n");
 
 await table.updateRecordAsync(recordId, {
   "Analysis": analysis,
